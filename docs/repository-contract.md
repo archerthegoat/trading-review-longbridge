@@ -2,7 +2,7 @@
 
 ## 目标
 
-本仓库是 `trading-center-review` 的可安装源仓库。它提供 Codex Skill、受控的数据边界、模板、确定性脚本和最小回归测试，不承载任何个人账户或运行时状态。
+本仓库是 `trading-center-review` 的可安装源仓库。它提供 Agent Skill、受控的数据边界、模板、确定性脚本和最小回归测试，不承载任何个人账户或运行时状态。
 
 ## 目录契约
 
@@ -54,11 +54,11 @@ trading-review-longbridge/
 
 ## 安装与锁定
 
-源仓库推荐使用：
+可选：先查看源仓库中的 Skill（不会执行安装）：
 
 ```bash
 npx skills add archerthegoat/trading-review-longbridge --list
-npx skills add archerthegoat/trading-review-longbridge --skill trading-center-review --agent codex
+npx skills add archerthegoat/trading-review-longbridge --skill trading-center-review
 ```
 
 若消费者项目生成 `skills-lock.json`，该文件记录消费者的安装版本，不能作为源仓库运行配置提交回来。

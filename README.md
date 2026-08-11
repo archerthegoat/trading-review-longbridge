@@ -1,29 +1,27 @@
 # trading-review-longbridge
 
-中文优先的交易中心复盘 Skill：把交易事实、用户陈述、公开市场证据、未验证缺口和待确认计划分开组织，默认不读取或写入券商/知识库的敏感数据。
+中文优先的交易中心复盘 Agent Skill：把交易事实、用户陈述、公开市场证据、未验证缺口和待确认计划分开组织，默认不读取或写入券商/知识库的敏感数据。
 
 ## 安装
 
-列出仓库中的可安装 Skill：
+可选：先列出仓库中的可安装 Skill（不会执行安装）：
 
 ```bash
 npx skills add archerthegoat/trading-review-longbridge --list
 ```
 
-安装到当前项目的 Codex Skill 目录：
+安装到当前项目的 Skill 目录（省略 `--agent` 时由 CLI 自动选择或提示目标 Agent）：
 
 ```bash
 npx skills add archerthegoat/trading-review-longbridge \
-  --skill trading-center-review \
-  --agent codex
+  --skill trading-center-review
 ```
 
-安装到当前用户的全局 Codex Skill 目录：
+安装到当前用户的全局 Skill 目录：
 
 ```bash
 npx skills add archerthegoat/trading-review-longbridge \
   --skill trading-center-review \
-  --agent codex \
   --global
 ```
 
@@ -119,6 +117,7 @@ lark-cli wiki +node-list \
 
 ```bash
 python3 -m unittest discover -s tests -v
+# 仅验证本地目录能被发现，不执行安装
 npx skills add . --list
 ```
 
