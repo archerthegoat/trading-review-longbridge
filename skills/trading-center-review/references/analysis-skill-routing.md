@@ -12,7 +12,7 @@
 | 宏观、行业、公司、候选标的研究 | `macro-equity-research` | 形成 Macro Regime、Financial Conditions、行业/公司 thesis 和候选池 | Longbridge macrodata 不是政策或新闻的唯一来源；需官方/高可信来源核验 |
 | 请求不明确或跨多个研究流程 | `trading-research` | 选择最具体的子 Skill 并按自然顺序编排 | 不能用路由 Skill 绕过授权门禁 |
 | 研究报告、PDF、链接或文章核验 | `research-report-intake`（如当前会话可用） | 生成摘要、Claim Ledger 和 Verification Queue | 文章是 thesis 输入，不直接作为事实或交易依据 |
-| 组合暴露、仓位集中、风险预算 | `portfolio-risk`（如当前会话可用） | 将已授权持仓事实转成组合风险读数 | Longbridge 仍受当前任务授权范围约束 |
+| 组合暴露、仓位集中、风险预算 | `portfolio-risk`（如当前会话可用） | 将已授权持仓事实转成组合风险读数 |
 
 ## Longbridge 三类能力不要混用
 

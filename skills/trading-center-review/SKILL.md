@@ -11,7 +11,7 @@ description: 组织交易中心的日常主动录入、每日复盘、周度交�
 
 1. 读取当前项目的 `AGENTS.md`、`CONTEXT.md` 和现有交易中心材料；缺失时记录为“未验证”，不可用旧线程或猜测填补。
 2. 将每个结论标记为：`已完成`、`待用户授权`、`未验证` 或 `阻塞`。将用户陈述、导入事实、分析判断分别标注。
-3. 默认只读项目公开/可追踪材料。Longbridge 仅允许按 [Longbridge 导入契约](references/longbridge-import-contract.md) 例行只读同步当前持仓快照，不得因此读取成交、订单、资金、利润、对账单或凭据。
+3. 默认只读项目公开/可追踪材料。Longbridge 仅允许按 [Longbridge 导入契约](references/longbridge-import-contract.md) 例行只读同步当前持仓快照，不得因此读取成交、订单、资金、利润、对账单或凭据；本流程不提供其他券商接入。
 4. Longbridge 持仓同步是最小只读范围；其他 Longbridge 私有接口或本地导出仍须在**本线程**清楚授权，且授权只覆盖指定范围。先读取 [授权与数据边界](references/authorization-and-data-boundary.md) 与 [Longbridge 导入契约](references/longbridge-import-contract.md)。
 5. 任何飞书 Wiki 写入都须先展示目标空间/节点、待写内容和最小写入范围，并在本线程取得单独确认；未确认时只生成本地草稿。Longbridge 持仓快照不得因同步而自动写入 Wiki。
 
@@ -127,7 +127,7 @@ Wiki 写入和回读成功后，另在当前周度文件的每日增量区域追
 3. 盘中关注点不得新增计划外标的、价格位或买卖指令；现金约束、风险集中、未映射合约和数据缺口必须单独列出。
 4. 若是周六，则输出下一美股交易日的盘中关注点；若 Wiki 写入或回读失败，保留失败分类并停止在 Wiki 阶段，不声称已完成盘中交付。
 
-空间创建与文档创建分开处理：`lark-cli wiki +space-create` 只支持 user 身份；每日信息流使用的是已存在 space 中的 bot 子文档写入，不是创建新 space。交易中心若没有独立 space，先停在空间准备门禁，不得把内容写入其他业务 space，也不得用 bot/raw API 绕过 CLI 的 user-only 约束。已有目标 space 且 bot 已加入时，按 [Wiki 文档数据结构](references/feishu-wiki-record-structure.md) 的 `+node-list`、精确标题幂等检查和 `docs +create --as bot --doc-format markdown --parent-token ... --content -` 顺序执行。创建返回中的文档创建状态与 bot 为当前用户授予 `full_access` 的状态必须分开报告。
+空间创建与文档创建分开处理：`lark-cli wiki +space-create` 只支持 user 身份；交易中心若没有独立 space，按 [Wiki 文档数据结构](references/feishu-wiki-record-structure.md) 的“无独立 Wiki 时的初始化”小节执行，先检查授权、动态发现、dry-run 和用户确认，不猜 token、不创建替代空间。已有目标 space 且 bot 已加入时，按 `+node-list`、精确标题幂等检查和 `docs +create --as bot --doc-format markdown --parent-token ... --content -` 顺序执行。创建返回中的文档创建状态与 bot 为当前用户授予 `full_access` 的状态必须分开报告。
 
 ## 交付与验证
 

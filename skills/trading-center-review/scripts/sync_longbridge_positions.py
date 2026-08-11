@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Create a private read-only Longbridge current-positions snapshot.
 
-Only the authorized Longbridge positions endpoint is called.  The raw
-Longbridge response is parsed in
-memory and only an allow-listed private Markdown summary is written outside the
-Git worktree.
+The raw Longbridge response is parsed in memory and only an allow-listed private
+Markdown summary is written outside the Git worktree.
 """
 
 from __future__ import annotations
@@ -70,7 +68,7 @@ def render_report(items: list[dict[str, Any]]) -> str:
 ## 数据与边界
 
 - 来源：Longbridge CLI `positions --format json`。
-- 本次读取：当前 Longbridge 持仓快照；不读取其他券商账户接口。
+- 本次读取：当前 Longbridge 持仓快照。
 - 未调用：Longbridge 订单、成交、资金、利润、对账单或交易接口。
 - 输出位置：Git 工作树外的私有目录；不写入飞书 Wiki。
 - 数据语义：读取时快照，不代表历史持仓、期初持仓或账户完整性。

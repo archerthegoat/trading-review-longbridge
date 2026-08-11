@@ -6,6 +6,87 @@
 
 `lark-cli wiki +space-create` 的创建接口只接受 `--as user`；每日信息流没有调用这个命令，而是在已经存在、且 bot 已加入的 space 中写入子文档。交易中心若尚未有独立 space，不得把交易内容写进 `buddy1号 · 每日资讯`，也不得用 bot 绕过 space 创建接口。
 
+## 无独立 Wiki 时的初始化
+
+安装 Skill 不会创建飞书资源。只有在动态发现确认没有交易中心独立 Space 时，才按以下顺序初始化；Space 创建、根节点创建和首次文档写入是三个独立确认门。
+
+### 1. 检查用户授权，不把授权错误当成资源不存在
+
+```bash
+lark-cli auth status --json --verify
+```
+
+如果返回 `token_missing`、`needs_refresh` 或缺少 Wiki/Docx 权限，先由用户完成授权：
+
+```bash
+lark-cli auth login --domain wiki,docs --json
+```
+
+授权完成后必须重新运行 `auth status --json --verify`，再开始资源发现。`token_missing` 只表示当前用户 token 无法使用，不证明 Space 或节点不存在。
+
+### 2. 以 user 身份动态发现已有 Space
+
+```bash
+lark-cli wiki +space-list --as user --page-all --format json
+```
+
+优先复用名称和用途已经明确的交易研究 Space；不得猜 `space_id`，不得把交易中心初始化到其他业务 Space。发现到目标 Space 后，记录返回的真实 `space_id`，不要手工改写或拼接。
+
+### 3. 确认确实不存在后，预演并创建 Space
+
+建议名称为“交易投研中心”，但名称、描述和是否创建必须由用户确认。先预演：
+
+```bash
+lark-cli wiki +space-create \
+  --as user \
+  --name "交易投研中心" \
+  --description "交易计划、每日复盘、周度复盘与已确认的研究摘要" \
+  --dry-run \
+  --format json
+```
+
+用户明确确认预演内容后，才去掉 `--dry-run` 执行一次。创建成功后重新运行 `+space-list` 回读，确认名称、`space_id` 和可见性；不重复创建，不使用 bot 身份创建 Space。
+
+### 4. 初始化根节点
+
+先列出根节点：
+
+```bash
+lark-cli wiki +node-list \
+  --as user \
+  --space-id <space_id> \
+  --page-all \
+  --format json
+```
+
+根节点不存在时，先用 `lark-cli wiki +node-create --as user --space-id <space_id> --title "交易中心复盘" --obj-type docx --node-type origin --dry-run --format json` 预演，再经用户确认后创建。创建后重新 `+node-list` 回读并保存真实的节点 token；不得使用 `0`、空值或猜测 token。
+
+### 5. 验证 bot 是否能使用已初始化的 Space
+
+如果自动化需要 bot 创建子文档，必须先由 Space 管理员在飞书中把 bot 加入该 Space，再分别运行 `+space-list`/`+node-list` 的 `--as user` 和 `--as bot` 版本验证可见性。Space 创建成功不代表 bot 已加入；bot 可见性失败时停止写入，不用 raw API 绕过权限。
+
+### 6. 首次文档写入与回读
+
+在真实父节点下创建文档前，先检查精确标题是否已存在；展示 `run_id`、目标节点、标题、正文摘要和字段范围，用户确认后才执行：
+
+```bash
+lark-cli docs +create --as bot --doc-format markdown \
+  --parent-token <parent_node_token> \
+  --title '<标题>' \
+  --content @draft.md \
+  --format json
+lark-cli docs +fetch --as bot --doc <document_token> --doc-format markdown --format json
+```
+
+写入后必须回读标题、正文、revision 和 `permission_grant`。文档创建成功但权限授予失败时，分别报告两种状态，不能合并成“Wiki 初始化成功”。`docs +create` 的 Markdown 内容应遵循当前 `lark-doc` 规则，长内容优先用当前工作目录下的 `@draft.md` 文件传入。
+
+### 失败处理
+
+- `token_missing`、`needs_refresh` 或缺少 scope：先重新授权，不创建替代 Space。
+- Space 列表成功但没有目标 Space：保留“未初始化”，等待用户确认创建，不自动执行写入。
+- Space 存在但根节点或 bot 不可见：补齐节点/成员权限并重新回读，停止自动化写入。
+- 写入成功但回读失败：报告“部分完成/回读阻塞”，不得输出“已写入并核验”。
+
 目标 space 已经存在时，按每日信息流的可复用方式操作：
 
 ```bash
