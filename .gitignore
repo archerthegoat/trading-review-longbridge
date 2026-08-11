@@ -1,0 +1,24 @@
+# Python and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.env.*
+
+# Local and private runtime artifacts
+*.log
+runtime/
+private/
+records/
+research/
+mars-research/
+skills-lock.json
+
+# Operating-system/editor files
+.DS_Store
+.idea/
+.vscode/

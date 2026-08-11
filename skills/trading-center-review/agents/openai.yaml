@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易中心复盘"
+  short_description: "隔离券商私有数据并组织每日、周度交易复盘与下周研究规划"
+  default_prompt: "Use $trading-center-review to prepare a safe daily review or weekly review draft without broker or Wiki writes."
