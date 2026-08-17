@@ -88,6 +88,12 @@ description: 组织交易中心的日常主动录入、每日复盘、周度交�
 
 DeepSeek 只返回摘要层 JSON：`summary` 为字符串，`facts`、`position_impact`、`event_impact`、`unresolved` 为仅含字符串的数组；不得返回其他字段或交易指令。输出必须位于 Git 工作树外的私有路径并使用仅所有者可读权限。密钥缺失、输入越界、网络或 API 失败、返回非 JSON、字段类型不符、输出包含敏感标识或输出路径位于 Git 工作树内时，保持本地确定性事实并标记阻塞，不得静默回退为成功。
 
+### Standalone HTML 复盘看板
+
+用户要求可视化每日或周度复盘时，先读取 [复盘看板可视化契约](references/dashboard-visualization-contract.md)，再运行 `scripts/render_trade_review_dashboard.py`。使用固定资产 `assets/trade-review-dashboard-standalone.html` 直接生成 standalone HTML；不得使用 `document.write`、iframe `srcdoc`、外部 CDN 或运行时脚本拼接。输入 JSON 和成品 HTML 必须位于 Git 工作树外的私有运行目录，模板、脚本和无真实数据的测试才可进入 Git。
+
+看板固定分为：交易风格与整体逻辑、账户与交易证据、本周损益与执行复盘、逐标的交易计划、全市场重要事件。证据边界位于损益上方；默认不采集或展示资金流水；计划卡只能对应明确 ticker，组合暴露、部署状态、证据复核和系统流程不得伪装成独立交易计划；事件必须使用全市场宏观、政策、监管和行业财报窗口，不以持仓池替代事件筛选。渲染失败或 Schema 越界时标记 `blocked`，不回退为不稳定的内嵌 HTML。
+
 ### 分析 Skill 优先路由
 
 需要市场、宏观、标的、盘面或交易复盘分析时，先读取 [分析 Skill 路由与 Longbridge 能力边界](references/analysis-skill-routing.md)，检查当前 Codex 会话中是否暴露了可用的 `trading-research-system` Skill。优先使用最具体的 Skill：周度计划用 `weekly-trading-plan`，每日盘前和点位滚动用 `daily-market-tracking`，实际成交复盘用 `trade-review`，宏观/行业/公司研究用 `macro-equity-research`，需求不明确时才用 `trading-research` 路由。研究报告、组合风险等任务只有在对应 Skill 当前可调用时才接入。
