@@ -33,7 +33,7 @@ npx skills add archerthegoat/trading-review-longbridge \
 
 - `references/`：授权、Longbridge、Wiki 和分析路由边界。
 - `assets/`：每日录入、每日复盘、交易想法、周度计划和周度复盘模板。
-- `scripts/`：交易日、公开市场观察池、事件信息、受限 Longbridge 导入和草稿校验脚本。
+- `scripts/`：交易日、公开市场观察池、事件信息、受限 Longbridge 导入、DeepSeek 脱敏摘要和草稿校验脚本。
 - `agents/openai.yaml`：Codex 显示信息和默认调用提示。
 
 ## 固定工作流边界
@@ -44,6 +44,7 @@ npx skills add archerthegoat/trading-review-longbridge \
 - Longbridge 只提供受限的只读数据边界；不下单、不改撤单、不读取凭据。当前 Skill 不提供其他券商接入。
 - Longbridge 默认只读当前持仓快照；订单、成交、账户净值、盈亏、资金流和对账单需要本线程明确授权、明确时间范围和 Git 工作树外的私有输出目录。
 - 飞书 Wiki 写入必须经过目标、内容、范围展示和明确确认，并在写入后回读；未确认时只生成本地草稿。
+- DeepSeek 摘要是可选的外部文本整理层；只能接收 `trading-center-summary.v1` 白名单事实包，返回闭合 JSON，任何输入、网络、输出或隐私校验失败都保持阻塞状态。
 - 不能用当前持仓、用户口述或成功读取的局部数据冒充整周事实；查询失败保留“未验证/查询失败”，成功空数组才可写“接口在该窗口返回 0 条”。
 
 ## 飞书 Wiki 初始化

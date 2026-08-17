@@ -82,6 +82,12 @@ description: 组织交易中心的日常主动录入、每日复盘、周度交�
 
 只有用户确认某类叙述任务可使用 AI 后，才对该任务调用模型。例如：本周过程复盘初稿、重复纪律问题归纳、下周待讨论问题。不得让模型计算关键数值、编造缺失交易事实或替代授权判断。读取任何密钥仅限实际调用前的最小必要范围；不得打印、提交、复制进 Wiki 或保存在 Skill 目录中。模型名、接口地址和密钥文件路径在首次调用前单独确认。
 
+### DeepSeek 脱敏摘要适配器
+
+仅在用户确认摘要任务、模型和接口后运行 `scripts/deepseek_summary.py`。适配器只接受私有运行目录中的 `trading-center-summary.v1` 结构化事实包，并在网络调用前按字段白名单投影；账户标识、订单/成交/交易 ID、凭据、Cookie、API key、原始券商响应、佣金、对账单和自由文本字段一律拒绝。密钥只从运行时环境变量 `DEEPSEEK_API_KEY` 读取，不得写入参数、日志、Git 或 Wiki。
+
+DeepSeek 只返回摘要层 JSON：`summary` 为字符串，`facts`、`position_impact`、`event_impact`、`unresolved` 为仅含字符串的数组；不得返回其他字段或交易指令。输出必须位于 Git 工作树外的私有路径并使用仅所有者可读权限。密钥缺失、输入越界、网络或 API 失败、返回非 JSON、字段类型不符、输出包含敏感标识或输出路径位于 Git 工作树内时，保持本地确定性事实并标记阻塞，不得静默回退为成功。
+
 ### 分析 Skill 优先路由
 
 需要市场、宏观、标的、盘面或交易复盘分析时，先读取 [分析 Skill 路由与 Longbridge 能力边界](references/analysis-skill-routing.md)，检查当前 Codex 会话中是否暴露了可用的 `trading-research-system` Skill。优先使用最具体的 Skill：周度计划用 `weekly-trading-plan`，每日盘前和点位滚动用 `daily-market-tracking`，实际成交复盘用 `trade-review`，宏观/行业/公司研究用 `macro-equity-research`，需求不明确时才用 `trading-research` 路由。研究报告、组合风险等任务只有在对应 Skill 当前可调用时才接入。
