@@ -110,7 +110,7 @@ def dashboard_packet() -> dict[str, object]:
                         "date": "周三",
                         "time": "20:30 / 08:30 ET",
                         "title": "示例宏观数据",
-                        "meta": "全市场事件",
+                        "meta": "与示例持仓相关的美国宏观事件",
                         "kind": "macro",
                         "tag": "宏观 · 预期",
                         "source": "公开日历示例",
@@ -146,7 +146,7 @@ class DashboardRendererTests(unittest.TestCase):
         pnl_index = rendered.index("成交与损益概览")
         reviews_index = rendered.index("本周损益与执行复盘")
         plans_index = rendered.index("当前有效的标的交易计划")
-        events_index = rendered.index("本周与下周重要事件")
+        events_index = rendered.index("持仓与计划相关重要事件")
 
         self.assertLess(summary_index, evidence_index)
         self.assertLess(evidence_index, pnl_index)
@@ -154,6 +154,42 @@ class DashboardRendererTests(unittest.TestCase):
         self.assertLess(reviews_index, plans_index)
         self.assertLess(plans_index, events_index)
         self.assertNotIn("资金流水", rendered[plans_index:events_index])
+        self.assertIn("全量日历私存；只展示相关美股财报与明确风险通道", rendered)
+        self.assertNotIn("不按持仓池替代事件筛选", rendered)
+
+    def test_daily_layout_uses_holdings_and_plan_tabs(self) -> None:
+        packet = dashboard_packet()
+        packet["summary_cards"] = []
+        packet["summary_note"] = ""
+        packet["review_cards"] = []
+        packet["account"]["pnl"] = []  # type: ignore[index]
+        packet["plans"][0]["tab"] = "holdings"  # type: ignore[index]
+        packet["plans"].append(  # type: ignore[union-attr]
+            {
+                "symbol": "DEMOC",
+                "tab": "plan",
+                "name": "示例 Plan",
+                "subtitle": "抄底",
+                "state": "观察",
+                "state_tone": "blue",
+                "open": False,
+                "blocks": [
+                    {"label": "边界", "value": "计划不等于执行", "full": True},
+                ],
+            }
+        )
+
+        rendered = MODULE.render_dashboard(packet, self.template)
+
+        self.assertNotIn("交易风格与整体逻辑", rendered)
+        self.assertNotIn("本周损益与执行复盘", rendered)
+        self.assertNotIn("当前有效的标的交易计划", rendered)
+        self.assertIn("交易计划", rendered)
+        self.assertIn("当前持仓", rendered)
+        self.assertIn(">Plan<", rendered)
+        self.assertLess(rendered.index("账户与交易证据"), rendered.index("交易计划"))
+        self.assertLess(rendered.index("交易计划"), rendered.index("持仓与计划相关重要事件"))
+        self.assertIn("trc-plan-tab-panel", rendered)
 
     def test_render_computes_symbol_level_pnl_and_bar_widths(self) -> None:
         rendered = MODULE.render_dashboard(dashboard_packet(), self.template)

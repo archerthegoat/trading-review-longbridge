@@ -86,6 +86,7 @@ python3 scripts/render_trade_review_dashboard.py \
   "plans": [
     {
       "symbol": "DEMO",
+      "tab": "plan",
       "name": "标的级计划",
       "subtitle": "当前角色",
       "state": "观察",
@@ -127,6 +128,8 @@ python3 scripts/render_trade_review_dashboard.py \
 ```
 
 允许的 `tone`：`neutral`、`blue`、`green`、`amber`、`red`。允许的事件 `kind`：`news`、`macro`、`earnings`、`risk`。损益 `value` 必须为数值，显示格式和条形长度由脚本机械计算。
+
+每日交易计划卡可选 `tab` 字段，值为 `holdings` 或 `plan`；每日看板应明确填入该字段，分别表示当前持仓快照与尚未持仓的有效计划。周度卡片可省略该字段。
 
 ## 数据与发布边界
 

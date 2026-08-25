@@ -50,6 +50,7 @@ TOP_LEVEL_KEYS = frozenset(
 )
 TONE_VALUES = frozenset({"neutral", "blue", "green", "amber", "red"})
 EVENT_KIND_VALUES = frozenset({"news", "macro", "earnings", "risk"})
+PLAN_TAB_VALUES = frozenset({"holdings", "plan"})
 
 
 class DashboardRenderError(RuntimeError):
@@ -184,7 +185,7 @@ def _render_summary(packet: dict[str, Any]) -> str:
     note_html = f'<div class="trc-summary-note">{_escape(note)}</div>' if note else ""
     return (
         '<section class="trc-section" id="summary">'
-        + _section_head("01", "Strategy Summary", "交易风格与整体逻辑", "先呈现组合级判断，再进入标的计划")
+        + _section_head("01", "策略摘要", "交易风格与整体逻辑", "先呈现组合级判断，再进入标的计划")
         + f'<div class="trc-summary-grid">{"".join(cards)}</div>{note_html}</section>'
     )
 
@@ -205,7 +206,7 @@ def _pnl_tone(value: float) -> str:
     return "trc-neutral"
 
 
-def _render_account(packet: dict[str, Any]) -> str:
+def _render_account(packet: dict[str, Any], *, section_index: str = "02") -> str:
     raw = packet.get("account")
     if raw is None:
         return ""
@@ -291,7 +292,7 @@ def _render_account(packet: dict[str, Any]) -> str:
 
     return (
         '<section class="trc-section" id="account">'
-        + _section_head("02", "Account & Trades", "账户与交易证据", "先看证据边界，再看成交与损益；不展示资金流水")
+        + _section_head(section_index, "账户与交易", "账户与交易证据", "先看证据边界，再看成交与损益；不展示资金流水")
         + f'<div class="trc-card">{metrics_html}{evidence_html}{note_html}{pnl_html}</div></section>'
     )
 
@@ -318,7 +319,7 @@ def _render_reviews(packet: dict[str, Any]) -> str:
         )
     return (
         '<section class="trc-section" id="reviews">'
-        + _section_head("03", "Weekly Review Notes", "本周损益与执行复盘", "区分逻辑判断、执行纪律与持仓管理")
+        + _section_head("03", "周度复盘要点", "本周损益与执行复盘", "区分逻辑判断、执行纪律与持仓管理")
         + f'<div class="trc-card"><div class="trc-review-grid">{"".join(cards)}</div></div></section>'
     )
 
@@ -329,10 +330,17 @@ def _render_plans(packet: dict[str, Any]) -> str:
     if not raw_plans and not raw_excluded:
         return ""
     cards: list[str] = []
+    tab_cards: dict[str, list[str]] = {"holdings": [], "plan": []}
+    is_daily = not _array(packet.get("summary_cards", []), "$.summary_cards") and not _array(
+        packet.get("review_cards", []), "$.review_cards"
+    )
     for index, raw in enumerate(raw_plans):
         item = _object(raw, f"$.plans[{index}]")
-        _reject_unknown(item, {"symbol", "name", "subtitle", "state", "state_tone", "open", "blocks"}, f"$.plans[{index}]")
+        _reject_unknown(item, {"symbol", "name", "subtitle", "state", "state_tone", "open", "blocks", "tab"}, f"$.plans[{index}]")
         symbol = _text(item.get("symbol"), f"$.plans[{index}].symbol")
+        tab = _text(item.get("tab"), f"$.plans[{index}].tab", required=False) or "plan"
+        if tab not in PLAN_TAB_VALUES:
+            raise DashboardRenderError(f"$.plans[{index}].tab must be one of {sorted(PLAN_TAB_VALUES)}")
         state_tone = _tone(item.get("state_tone"), f"$.plans[{index}].state_tone", default="green")
         blocks: list[str] = []
         for block_index, raw_block in enumerate(_array(item.get("blocks", []), f"$.plans[{index}].blocks")):
@@ -345,7 +353,7 @@ def _render_plans(packet: dict[str, Any]) -> str:
                 f'<div class="trc-plan-block-value">{_escape(_text(block.get("value"), f"$.plans[{index}].blocks[{block_index}].value"))}</div>'
                 '</div>'
             )
-        cards.append(
+        card = (
             f'<details class="trc-plan-card"{" open" if _boolean(item.get("open"), f"$.plans[{index}].open") else ""}>'
             '<summary class="trc-plan-summary">'
             f'<span class="trc-ticker">{_escape(symbol)}</span>'
@@ -354,6 +362,8 @@ def _render_plans(packet: dict[str, Any]) -> str:
             f'<span class="trc-plan-state{_class_tone(state_tone)}">{_escape(_text(item.get("state"), f"$.plans[{index}].state"))}</span>'
             f'</summary><div class="trc-plan-body">{"".join(blocks)}</div></details>'
         )
+        cards.append(card)
+        tab_cards[tab].append(card)
 
     excluded: list[str] = []
     for index, raw in enumerate(raw_excluded):
@@ -370,17 +380,37 @@ def _render_plans(packet: dict[str, Any]) -> str:
         if callout
         else ""
     )
+    if is_daily:
+        def panel(panel_id: str, items: list[str], empty: str) -> str:
+            content = "".join(items) or f'<div class="trc-small-note">{_escape(empty)}</div>'
+            return f'<div id="trc-plan-panel-{panel_id}" class="trc-plan-tab-panel" role="tabpanel"><div class="trc-plan-grid">{content}</div></div>'
+
+        plans_html = (
+            '<div class="trc-plan-tabs" role="tablist" aria-label="交易计划视图">'
+            '<input class="trc-plan-tab-input" type="radio" name="trc-plan-tab" id="trc-plan-tab-holdings" checked>'
+            '<label class="trc-plan-tab-label" for="trc-plan-tab-holdings" role="tab">当前持仓</label>'
+            '<input class="trc-plan-tab-input" type="radio" name="trc-plan-tab" id="trc-plan-tab-plan">'
+            '<label class="trc-plan-tab-label" for="trc-plan-tab-plan" role="tab">Plan</label>'
+            '<div class="trc-plan-tab-panels">'
+            + panel("holdings", tab_cards["holdings"], "当前没有已确认的持仓计划。")
+            + panel("plan", tab_cards["plan"], "当前没有未持仓的 Plan。")
+            + '</div></div>'
+        )
+        section_head = _section_head("02", "交易计划", "交易计划", "按当前持仓与未持仓的 Plan 分开；五类策略只作研究分类")
+    else:
+        plans_html = f'<div class="trc-plan-grid">{"".join(cards)}</div>'
+        section_head = _section_head("04", "标的计划", "当前有效的标的交易计划", "只放具体标的；组合级方向留在摘要，不混入系统流程")
     return (
         '<section class="trc-section" id="plans">'
-        + _section_head("04", "Instrument Plans", "当前有效的标的交易计划", "只放具体标的；组合级方向留在摘要，不混入系统流程")
+        + section_head
         + callout_html
-        + f'<div class="trc-plan-grid">{"".join(cards)}</div>'
+        + plans_html
         + (f'<div class="trc-excluded">{"".join(excluded)}</div>' if excluded else "")
         + '</section>'
     )
 
 
-def _render_events(packet: dict[str, Any]) -> str:
+def _render_events(packet: dict[str, Any], *, index: str = "05") -> str:
     raw_groups = _array(packet.get("event_groups", []), "$.event_groups")
     if not raw_groups:
         return ""
@@ -421,7 +451,7 @@ def _render_events(packet: dict[str, Any]) -> str:
     event_note = _text(packet.get("event_note"), "$.event_note", required=False)
     return (
         '<section class="trc-section" id="events">'
-        + _section_head("05", "Market Calendar", "本周与下周重要事件", "使用全市场宏观、政策与行业财报日历，不按持仓池替代事件筛选")
+        + _section_head(index, "相关事件", "持仓与计划相关重要事件", "全量日历私存；只展示相关美股财报与明确风险通道")
         + f'<div class="trc-card"><div class="trc-calendar">{"".join(groups)}'
         + (f'<div class="trc-calendar-footnote">{_escape(event_note)}</div>' if event_note else "")
         + '</div></div></section>'
@@ -443,15 +473,18 @@ def render_dashboard(packet: object, template: str) -> str:
     validated = validate_packet(packet)
     if template.count(BODY_MARKER) != 1:
         raise DashboardRenderError("HTML template must contain exactly one dashboard body marker")
+    is_daily = not _array(validated.get("summary_cards", []), "$.summary_cards") and not _array(
+        validated.get("review_cards", []), "$.review_cards"
+    )
     body = "".join(
         (
             _render_header(validated),
             _render_status(validated),
-            _render_summary(validated),
-            _render_account(validated),
-            _render_reviews(validated),
+            "" if is_daily else _render_summary(validated),
+            _render_account(validated, section_index="01" if is_daily else "02"),
+            "" if is_daily else _render_reviews(validated),
             _render_plans(validated),
-            _render_events(validated),
+            _render_events(validated, index="03" if is_daily else "05"),
         )
     )
     footer = _text(validated.get("footer"), "$.footer", required=False)

@@ -164,6 +164,14 @@
 
     .trc-plan-callout { display: grid; grid-template-columns: auto 1fr; gap: 10px; margin-bottom: 10px; padding: 11px 13px; color: #4d6075; background: var(--blue-soft); border: 1px solid #cad9f5; border-radius: 12px; font-size: 12px; }
     .trc-plan-callout-mark { display: grid; place-items: center; width: 22px; height: 22px; color: #fff; background: var(--blue); border-radius: 50%; font-weight: 800; }
+    .trc-plan-tabs { position: relative; }
+    .trc-plan-tab-input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+    .trc-plan-tab-label { display: inline-flex; align-items: center; min-height: 36px; margin: 0 7px 12px 0; padding: 7px 14px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-weight: 700; }
+    .trc-plan-tab-label:hover { color: var(--ink); border-color: #b8c8dc; }
+    .trc-plan-tab-input:focus-visible + .trc-plan-tab-label { outline: 3px solid #b8d0ff; outline-offset: 2px; }
+    #trc-plan-tab-holdings:checked + .trc-plan-tab-label, #trc-plan-tab-plan:checked + .trc-plan-tab-label { color: #2759bb; background: var(--blue-soft); border-color: #cbdcff; }
+    .trc-plan-tab-panel { display: none; }
+    #trc-plan-tab-holdings:checked ~ .trc-plan-tab-panels #trc-plan-panel-holdings, #trc-plan-tab-plan:checked ~ .trc-plan-tab-panels #trc-plan-panel-plan { display: block; }
     .trc-plan-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .trc-plan-card { overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
     .trc-plan-card[open] { border-color: #c5d5ea; box-shadow: var(--shadow); }
