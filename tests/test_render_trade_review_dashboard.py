@@ -191,6 +191,76 @@ class DashboardRendererTests(unittest.TestCase):
         self.assertLess(rendered.index("交易计划"), rendered.index("持仓与计划相关重要事件"))
         self.assertIn("trc-plan-tab-panel", rendered)
 
+    def test_operations_first_layout_hides_account_backend_section(self) -> None:
+        packet = dashboard_packet()
+        packet["dashboard_mode"] = "operations-first"
+        packet["summary_cards"] = [
+            {
+                "kicker": "用户确认",
+                "title": "示例昨日操作",
+                "text": "按计划完成一项操作，执行证据边界保留在摘要脚注。",
+                "tone": "amber",
+            }
+        ]
+        packet["summary_note"] = "昨日窗口与快照净变化的最小边界。"
+        packet["review_cards"] = []
+        packet["plans"][0]["tab"] = "holdings"  # type: ignore[index]
+        packet["plans"].append(  # type: ignore[union-attr]
+            {
+                "symbol": "DEMOC",
+                "tab": "plan",
+                "name": "示例 Plan",
+                "subtitle": "观察",
+                "state": "有效",
+                "state_tone": "blue",
+                "open": False,
+                "blocks": [
+                    {"label": "边界", "value": "计划不等于执行", "full": True},
+                ],
+            }
+        )
+
+        rendered = MODULE.render_dashboard(packet, self.template)
+
+        self.assertIn("昨日操作摘要", rendered)
+        self.assertNotIn("账户与交易证据", rendered)
+        self.assertNotIn("成交与损益概览", rendered)
+        self.assertNotIn("本周损益与执行复盘", rendered)
+        self.assertIn('class="trc-operations-list"', rendered)
+        self.assertNotIn('class="trc-operation-kicker"', rendered)
+        self.assertEqual(rendered.count('class="trc-summary-card'), 0)
+        self.assertLess(rendered.index("昨日操作摘要"), rendered.index("交易计划"))
+        self.assertLess(rendered.index("交易计划"), rendered.index("持仓与计划相关重要事件"))
+        self.assertIn("当前持仓", rendered)
+        self.assertIn(">Plan<", rendered)
+
+    def test_operations_first_focus_follows_events(self) -> None:
+        packet = dashboard_packet()
+        packet["dashboard_mode"] = "operations-first"
+        packet["summary_cards"] = [
+            {
+                "kicker": "操作",
+                "title": "示例昨日操作",
+                "text": "只记录已确认的操作摘要。",
+                "tone": "amber",
+            }
+        ]
+        packet["review_cards"] = []
+        packet["plans"][0]["tab"] = "holdings"  # type: ignore[index]
+        packet["focus_items"] = [
+            {"title": "当天窗口", "text": "只沿用已确认事件。", "tone": "blue"},
+            {"title": "数据缺口", "text": "执行映射仍待核验。", "tone": "amber"},
+        ]
+        packet["focus_note"] = "确认版本边界。"
+
+        rendered = MODULE.render_dashboard(packet, self.template)
+
+        self.assertIn("Wiki 写入后的盘中关注点", rendered)
+        self.assertIn("当天窗口", rendered)
+        self.assertIn("确认版本边界。", rendered)
+        self.assertLess(rendered.index("持仓与计划相关重要事件"), rendered.index("Wiki 写入后的盘中关注点"))
+        self.assertNotIn('class="trc-operation-kicker"', rendered)
+
     def test_render_computes_symbol_level_pnl_and_bar_widths(self) -> None:
         rendered = MODULE.render_dashboard(dashboard_packet(), self.template)
 

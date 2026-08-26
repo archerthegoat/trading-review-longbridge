@@ -119,6 +119,24 @@
     .trc-summary-kicker { margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 700; }
     .trc-summary-card p { margin-top: 7px; color: #4f5f70; font-size: 12px; }
     .trc-summary-note { margin-top: 10px; padding: 10px 13px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 12px; font-size: 11px; }
+    .trc-operations-list { margin: 0; padding: 0 0 0 24px; }
+    .trc-operation-item { padding: 9px 4px 9px 4px; color: #4f5f70; font-size: 13px; line-height: 1.55; border-bottom: 1px solid #edf1f5; }
+    .trc-operation-item:last-child { border-bottom: 0; }
+    .trc-operation-item.blue::marker { color: var(--blue); }
+    .trc-operation-item.amber::marker { color: var(--amber); }
+    .trc-operation-item.green::marker { color: var(--green); }
+    .trc-operation-item.red::marker { color: var(--red); }
+    .trc-operation-title { margin-right: 6px; color: var(--ink); font-weight: 760; }
+    .trc-operation-text { color: #4f5f70; }
+    .trc-focus-list { margin: 0; padding: 0 0 0 24px; }
+    .trc-focus-item { padding: 9px 4px; color: #4f5f70; font-size: 13px; line-height: 1.55; border-bottom: 1px solid #edf1f5; }
+    .trc-focus-item:last-child { border-bottom: 0; }
+    .trc-focus-item.blue::marker { color: var(--blue); }
+    .trc-focus-item.amber::marker { color: var(--amber); }
+    .trc-focus-item.green::marker { color: var(--green); }
+    .trc-focus-item.red::marker { color: var(--red); }
+    .trc-focus-title { margin-right: 6px; color: var(--ink); font-weight: 760; }
+    .trc-focus-text { color: #4f5f70; }
 
     .trc-account-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 14px; }
     .trc-metric { min-height: 82px; padding: 12px 13px; background: #fbfcfe; border: 1px solid var(--line); border-radius: 12px; }
@@ -181,6 +199,7 @@
     .trc-plan-name { font-weight: 750; }
     .trc-plan-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
     .trc-plan-state { padding: 3px 7px; color: #176f50; background: var(--green-soft); border-radius: 6px; font-size: 11px; white-space: nowrap; }
+    .trc-plan-state.blue { color: #2759bb; background: var(--blue-soft); }
     .trc-plan-state.amber { color: #8d5a0b; background: var(--amber-soft); }
     .trc-plan-state.red { color: #a23d3d; background: var(--red-soft); }
     .trc-plan-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; padding: 11px 14px 13px; border-top: 1px solid #edf1f5; }

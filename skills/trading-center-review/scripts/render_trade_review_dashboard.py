@@ -31,6 +31,7 @@ DEFAULT_TEMPLATE = (
 TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
+        "dashboard_mode",
         "eyebrow",
         "title",
         "subtitle",
@@ -45,6 +46,8 @@ TOP_LEVEL_KEYS = frozenset(
         "excluded",
         "event_groups",
         "event_note",
+        "focus_items",
+        "focus_note",
         "footer",
     }
 )
@@ -165,28 +168,51 @@ def _render_status(packet: dict[str, Any]) -> str:
     )
 
 
-def _render_summary(packet: dict[str, Any]) -> str:
+def _render_summary(packet: dict[str, Any], *, section_index: str = "01", operations_first: bool = False) -> str:
     raw_cards = _array(packet.get("summary_cards", []), "$.summary_cards")
     if not raw_cards:
         return ""
     cards: list[str] = []
+    operations: list[str] = []
     for index, raw in enumerate(raw_cards):
         item = _object(raw, f"$.summary_cards[{index}]")
         _reject_unknown(item, {"kicker", "title", "text", "tone"}, f"$.summary_cards[{index}]")
         tone = _tone(item.get("tone"), f"$.summary_cards[{index}].tone")
-        cards.append(
-            f'<article class="trc-summary-card{_class_tone(tone)}">'
-            f'<div class="trc-summary-kicker">{_escape(_text(item.get("kicker"), f"$.summary_cards[{index}].kicker"))}</div>'
-            f'<h3>{_escape(_text(item.get("title"), f"$.summary_cards[{index}].title"))}</h3>'
-            f'<p>{_escape(_text(item.get("text"), f"$.summary_cards[{index}].text"))}</p>'
-            '</article>'
-        )
+        kicker = _escape(_text(item.get("kicker"), f"$.summary_cards[{index}].kicker"))
+        title = _escape(_text(item.get("title"), f"$.summary_cards[{index}].title"))
+        text = _escape(_text(item.get("text"), f"$.summary_cards[{index}].text"))
+        if operations_first:
+            operations.append(
+                f'<li class="trc-operation-item{_class_tone(tone)}">'
+                f'<strong class="trc-operation-title">{title}</strong>'
+                f'<span class="trc-operation-text">{text}</span>'
+                '</li>'
+            )
+        else:
+            cards.append(
+                f'<article class="trc-summary-card{_class_tone(tone)}">'
+                f'<div class="trc-summary-kicker">{kicker}</div>'
+                f'<h3>{title}</h3>'
+                f'<p>{text}</p>'
+                '</article>'
+            )
     note = _text(packet.get("summary_note"), "$.summary_note", required=False)
     note_html = f'<div class="trc-summary-note">{_escape(note)}</div>' if note else ""
+    if operations_first:
+        section_id = "operations-summary"
+        section_head = _section_head(section_index, "昨日操作", "昨日操作摘要", "只保留操作摘要和必要数据口径")
+    else:
+        section_id = "summary"
+        section_head = _section_head(section_index, "策略摘要", "交易风格与整体逻辑", "先呈现组合级判断，再进入标的计划")
+    summary_content = (
+        f'<ul class="trc-operations-list">{"".join(operations)}</ul>'
+        if operations_first
+        else f'<div class="trc-summary-grid">{"".join(cards)}</div>'
+    )
     return (
-        '<section class="trc-section" id="summary">'
-        + _section_head("01", "策略摘要", "交易风格与整体逻辑", "先呈现组合级判断，再进入标的计划")
-        + f'<div class="trc-summary-grid">{"".join(cards)}</div>{note_html}</section>'
+        f'<section class="trc-section" id="{section_id}">'
+        + section_head
+        + f'{summary_content}{note_html}</section>'
     )
 
 
@@ -331,8 +357,9 @@ def _render_plans(packet: dict[str, Any]) -> str:
         return ""
     cards: list[str] = []
     tab_cards: dict[str, list[str]] = {"holdings": [], "plan": []}
-    is_daily = not _array(packet.get("summary_cards", []), "$.summary_cards") and not _array(
-        packet.get("review_cards", []), "$.review_cards"
+    is_daily = packet.get("dashboard_mode") == "operations-first" or (
+        not _array(packet.get("summary_cards", []), "$.summary_cards")
+        and not _array(packet.get("review_cards", []), "$.review_cards")
     )
     for index, raw in enumerate(raw_plans):
         item = _object(raw, f"$.plans[{index}]")
@@ -458,11 +485,43 @@ def _render_events(packet: dict[str, Any], *, index: str = "05") -> str:
     )
 
 
+def _render_focus(packet: dict[str, Any], *, index: str = "04") -> str:
+    raw_items = _array(packet.get("focus_items", []), "$.focus_items")
+    if not raw_items:
+        return ""
+    items: list[str] = []
+    for item_index, raw_item in enumerate(raw_items):
+        path = f"$.focus_items[{item_index}]"
+        item = _object(raw_item, path)
+        _reject_unknown(item, {"title", "text", "tone"}, path)
+        tone = _tone(item.get("tone"), f"{path}.tone")
+        title = _escape(_text(item.get("title"), f"{path}.title"))
+        text = _escape(_text(item.get("text"), f"{path}.text"))
+        items.append(
+            f'<li class="trc-focus-item{_class_tone(tone)}">'
+            f'<strong class="trc-focus-title">{title}</strong>'
+            f'<span class="trc-focus-text">{text}</span>'
+            '</li>'
+        )
+    focus_note = _text(packet.get("focus_note"), "$.focus_note", required=False)
+    note_html = f'<div class="trc-summary-note">{_escape(focus_note)}</div>' if focus_note else ""
+    return (
+        '<section class="trc-section" id="focus">'
+        + _section_head(index, "盘中关注", "Wiki 写入后的盘中关注点", "只沿用已确认版本，不新增交易指令")
+        + f'<ul class="trc-focus-list">{"".join(items)}</ul>'
+        + note_html
+        + '</section>'
+    )
+
+
 def validate_packet(value: object) -> dict[str, Any]:
     packet = _object(value, "$")
     _reject_unknown(packet, TOP_LEVEL_KEYS, "$")
     if packet.get("schema_version") != SCHEMA_VERSION:
         raise DashboardRenderError(f"schema_version must be {SCHEMA_VERSION}")
+    dashboard_mode = packet.get("dashboard_mode")
+    if dashboard_mode is not None and dashboard_mode != "operations-first":
+        raise DashboardRenderError("$.dashboard_mode must be operations-first when provided")
     for key in ("eyebrow", "title", "subtitle"):
         _text(packet.get(key), f"$.{key}")
     return packet
@@ -473,20 +532,35 @@ def render_dashboard(packet: object, template: str) -> str:
     validated = validate_packet(packet)
     if template.count(BODY_MARKER) != 1:
         raise DashboardRenderError("HTML template must contain exactly one dashboard body marker")
-    is_daily = not _array(validated.get("summary_cards", []), "$.summary_cards") and not _array(
-        validated.get("review_cards", []), "$.review_cards"
+    is_operations_first = validated.get("dashboard_mode") == "operations-first"
+    is_daily = is_operations_first or (
+        not _array(validated.get("summary_cards", []), "$.summary_cards")
+        and not _array(validated.get("review_cards", []), "$.review_cards")
     )
-    body = "".join(
-        (
-            _render_header(validated),
-            _render_status(validated),
-            "" if is_daily else _render_summary(validated),
-            _render_account(validated, section_index="01" if is_daily else "02"),
-            "" if is_daily else _render_reviews(validated),
-            _render_plans(validated),
-            _render_events(validated, index="03" if is_daily else "05"),
+    if is_operations_first:
+        body = "".join(
+            (
+                _render_header(validated),
+                _render_status(validated),
+                _render_summary(validated, section_index="01", operations_first=True),
+                _render_plans(validated),
+                _render_events(validated, index="03"),
+                _render_focus(validated, index="04"),
+            )
         )
-    )
+    else:
+        body = "".join(
+            (
+                _render_header(validated),
+                _render_status(validated),
+                "" if is_daily else _render_summary(validated),
+                _render_account(validated, section_index="01" if is_daily else "02"),
+                "" if is_daily else _render_reviews(validated),
+                _render_plans(validated),
+                _render_events(validated, index="03" if is_daily else "05"),
+                _render_focus(validated, index="04" if is_daily else "06"),
+            )
+        )
     footer = _text(validated.get("footer"), "$.footer", required=False)
     if footer:
         body += f'<footer class="trc-footer">{_escape(footer)}</footer>'
