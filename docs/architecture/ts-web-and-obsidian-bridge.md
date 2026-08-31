@@ -190,7 +190,7 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 - 进程回读：原任务临时预览经原终端正常退出，未按旧 PID 杀进程；新 Agent 从 running PID 30098 经显式 restart 变为 running PID 30634，页面 hash 不变。从上述固定 code 目录执行 rebuild 得到同一 publication id，无源临时文件或仓库读取依赖。
 - 无副作用回读：安装和重建后，真实 SQLite、交易中心开发路径图、Obsidian 交易日记模板的文件 hash 均与实施前相同；当前安装包 hash 与源码包相同。知识中心/Vault 没有本轮文件变更。
 - Agent 浏览器技术检查：原单标签刷新，正常桌面面板实际 775×796、未设置手机/窄屏模拟，页面 scrollWidth 等于面板宽；一个 main、14 个日期桶、无脚本/外部链接，空候选可见，切换后恢复持仓视图。自动观察到清楚的焦点环；完整键盘、Console/Network、关闭 Codex 和注销后可用性未代做人工验收。
-- 发布源码：准备提交并推送 main；最终 Git SHA 与远端 CI 以发布回读为准，不把本地通过当远端 CI 成功。
+- 发布源码：代码提交 [2ed8cfd2e0388fc1fd87664023e0da37acf48efb](https://github.com/archerthegoat/trading-review-longbridge/commit/2ed8cfd2e0388fc1fd87664023e0da37acf48efb) 已推送 `main`，远端分支 SHA 回读一致；GitHub API 将该提交的 author 和 committer 均关联到 `archerthegoat`。[对应 push CI](https://github.com/archerthegoat/trading-review-longbridge/actions/runs/33394835354) 回读 `completed / success`。后续本段工程记录提交不改变上述运行代码包或页面。
 - 实际 review/plan 确认、真实 Obsidian 日记同步：NOT RUN；不能以安装或 fixture 冒充。
 - 原五类策略准确名称、市赚率数据接入和未确认交易条件仍待另行处理。
 
