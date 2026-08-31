@@ -2,67 +2,94 @@
 
 ## 目标
 
-本仓库是 `trading-center-review` 的可安装源仓库。它提供 Agent Skill、受控的数据边界、模板、确定性脚本和最小回归测试，不承载任何个人账户或运行时状态。
+本仓库是稳定 Skill `trading-center-review` 的可安装源。它维护模式路由、Longbridge 只读边界、SQLite schema/迁移、增量 runner、V1/V2 renderer、模板和测试，不承载个人账户数据或生产运行时。
 
-## 目录契约
+## 目录与单一入口
 
-```text
+~~~text
 trading-review-longbridge/
 ├── README.md
-├── .gitignore
-├── .github/workflows/ci.yml
+├── 开发路径图.md
 ├── docs/
-├── skills/
-│   └── trading-center-review/
-│       ├── SKILL.md
-│       ├── agents/openai.yaml
-│       ├── assets/
-│       ├── references/
-│       └── scripts/
+├── skills/trading-center-review/
+│   ├── SKILL.md
+│   ├── agents/openai.yaml
+│   ├── assets/
+│   ├── references/
+│   └── scripts/
 └── tests/
-```
+~~~
 
-`skills/trading-center-review/SKILL.md` 是唯一 Skill 入口。仓库名与 Skill 名有意分开：前者是 `trading-review-longbridge`，后者是稳定的 `trading-center-review`，以保持 `$trading-center-review` 调用和已存在的自动化提示兼容。
+`SKILL.md` 是唯一入口，保持共享门禁和按模式 reference 路由。详细每日、周度、SQLite、V2、分析与知识交接规则不重复堆入入口。
 
-## 调度语义
+仓库名与 Skill 名有意分开，以保持 `$trading-center-review` 和现有自动化提示兼容。
 
-- 周二至周五：每日盘前复盘。
-- 周六 09:00（Asia/Shanghai）：周度复盘与下周计划重整。
-- 周一、周日：不触发。
+## Skill-first 边界
 
-仓库只记录语义和验收合同；实际调度器、时区、目标项目和失败重试属于外部运行配置，不能通过安装 Skill 自动创建或覆盖。
+本阶段不包含：
 
-## 数据边界
+- `.codex-plugin/plugin.json`
+- MCP server
+- Codex App
+- marketplace 条目
+- hooks 或常驻后台服务
 
-- Longbridge 是当前唯一的券商数据接入边界，默认只读当前持仓快照，不提供交易执行或其他券商接入。订单、成交、账户净值、盈亏、资金流和对账单必须有本线程明确授权、明确窗口和 Git 工作树外的私有输出位置。
-- 任何查询或解析失败都保留失败分类和“未验证”；成功返回空列表才允许写“接口在该窗口返回 0 条”。
-- 事件信息是可见交付的一部分：财报、宏观和观察池相关事件不能只停留在私有工件中；每日两段事件必须使用同一五列表格合同。
-- 飞书 Wiki 写入是独立确认门。未确认时只生成草稿；写入后必须回读，失败时不得声称已完成。
+Plugin 决策门见架构报告。未来 Plugin 只能包装现有 Skill，不能要求重写它或改变数据库格式。
 
-## 无 Wiki 时的初始化
+## 数据与状态
 
-安装 Skill 不会自动创建飞书资源。初始化顺序固定为：
+- Longbridge 是唯一券商边界，只运行当前任务已经授权的只读能力和窗口。
+- 原始响应、机械日历和账户明细只写 Git 外的私有运行目录。
+- owner-only SQLite 只接收固定白名单投影；路径、表、字段、迁移和禁止值见 `references/incremental-state-contract.md`。
+- complete/成功 empty 分区可复用；partial、stale、blocked 和缺失分区必须重试。
+- 数据状态与用户确认状态保持两轴。
+- Schema v3 追加计划版本/区间、underlying episode 分类与执行质量指标；v2 P&L 表仅保留历史，新入口不再写入。禁止自由 JSON、原始执行价格、费用/佣金或具体期权合约身份。
+- 周度来源每个获授权 run 仍需显式读取；历史 revision 不自动变成下一周数据。每日运行对 `weekly_*` 表为零写入。
+- 查询失败不能变成空数据；当前快照不能替代历史、收盘或整周事实。
 
-1. 用 `lark-cli auth status --json --verify` 检查用户授权；`token_missing` 或 `needs_refresh` 先完成 `lark-cli auth login --domain wiki,docs --json`，不能把授权失败当成 Wiki 不存在。
-2. 用 `lark-cli wiki +space-list --as user --page-all --format json` 动态发现已有 Space；不猜 `space_id`，不复用无关业务 Space。
-3. 确认没有独立 Space 后，用 `wiki +space-create --as user --name ... --description ... --dry-run --format json` 预演；用户单独确认后才执行真实创建。
-4. 用 `wiki +node-list --as user --space-id <space_id> --page-all --format json` 读取根节点；缺失时先预演 `+node-create --dry-run`，确认后创建并回读。
-5. 如需 bot 写入，先由 Space 管理员把 bot 加入 Space，再分别用 `--as user`、`--as bot` 验证可见性；bot 不能代替用户创建 Space。
-6. 文档写入按精确标题幂等检查、展示写入包、用户确认、写入、`docs +fetch` 回读的顺序执行。
+## UI 与分析
 
-完整命令和失败状态见 [`feishu-wiki-record-structure.md`](../skills/trading-center-review/references/feishu-wiki-record-structure.md)。
+- V1 renderer、模板和测试保留为回滚线。
+- V2 只消费严格固定 JSON，拒绝未知字段、敏感字段/值、外部 URL、脚本、iframe、运行时网络和 Git 内输入输出。
+- V2 私有 account 模块继续校验，但不渲染账户概览、金额、基础币种、账户快照时间或金额控件。
+- 每日与周度共用一个 V2 renderer/template 和原每日骨架；不设置日/周切换或独立 panel。无周度显示“尚未生成”，无合格每日包禁止生成页面。周度执行指标 blocked 可在单页中显示明确缺口。
+- 计划统一 EMA20/50/200，增加右侧 bottom_reversal；pre_entry 不含 add，实际买入核验后才可生成 position_management 草案并再次确认。
+- Codex 只读取脱敏固定事实，按 `facts_hash + plan_hash + analysis_contract_version` 缓存。
+- 事实、解释、条件式检查和缺口分开；不生成无条件交易指令。
 
-## 安装与锁定
+## 外部写入
 
-可选：先查看源仓库中的 Skill（不会执行安装）：
+安装或运行 Skill 不会：
 
-```bash
-npx skills add archerthegoat/trading-review-longbridge --list
-npx skills add archerthegoat/trading-review-longbridge --skill trading-center-review
-```
+- 创建或修改自动化。
+- 写入 Longbridge。
+- 创建或写入 Feishu Wiki。
+- 创建或写入 Obsidian。
+- 创建生产数据库，除非用户显式运行增量 runner。
+- push、PR、merge、发布或切换生产。
 
-若消费者项目生成 `skills-lock.json`，该文件记录消费者的安装版本，不能作为源仓库运行配置提交回来。
+用户当前 run 确认“复盘完成”后，只生成脱敏知识交接候选。知识中心任务是 Obsidian 唯一写入者。Feishu 过渡写入仍需要单独预览、确认和回读。
 
-## 迁移和回滚
+## 迁移与回滚
 
-发布新版本前，在隔离项目中运行 npx 安装、Python 测试、草稿校验和事件章节检查；再做至少一次每日与一次周六周度 shadow run。运行时切换必须单独完成，并保留旧 Skill 路径作为回滚点。发布仓库的新分支或版本不会自动切换现有自动化，也不会扩大券商或 Wiki 权限。
+- 源码基线为 `codex/trading-review-semantics@3e9bafb`，实施分支为 `codex/trading-review-incremental-state`。
+- 损坏的旧 `web-ui-v2` 只作恢复证据，不修补其 Git 元数据。
+- 不复制日志、runtime、records、broker 数据、缓存或 `__pycache__`。
+- 数据库迁移前生成 owner-only 备份；失败回滚并保持旧库。
+- 自动化切回 V1 时忽略 SQLite 即可。
+
+## 验证与验收
+
+自动门至少覆盖：
+
+- V1/V2 renderer 回归。
+- complete、empty、partial、stale、blocked。
+- SQLite 路径、权限、Schema、revision、幂等、锁和迁移失败。
+- 每日 collection plan、固定脱敏 ingest、分析缓存和 manifest 隐私。
+- 周度预期交易日完整性。
+- 草稿结构、事件状态、成功空语义和敏感值。
+- Skill quick validation、`git diff --check` 和静态离线扫描。
+
+真实每日 shadow、真实周度 shadow、自动浏览器/视觉检查和用户人工 PASS 分开记录。自动测试通过不等于真实数据覆盖或人工验收通过。
+
+发布、自动化切换和真实数据保留/清理策略均需单独批准。

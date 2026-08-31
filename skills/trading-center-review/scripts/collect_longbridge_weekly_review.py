@@ -12,6 +12,8 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from private_runtime_io import PrivateRuntimeError, prepare_private_output, write_owner_only_text
+
 
 US_EASTERN = ZoneInfo("America/New_York")
 
@@ -43,14 +45,6 @@ def us_eastern_window(start: str, end: str) -> tuple[str, str]:
         start_ts.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z"),
         end_ts.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z"),
     )
-
-
-def is_in_git_worktree(path: Path) -> bool:
-    resolved = path.expanduser().resolve()
-    for parent in (resolved.parent, *resolved.parents):
-        if (parent / ".git").exists():
-            return True
-    return False
 
 
 def command_set(binary: str, start: str, end: str) -> dict[str, list[str]]:
@@ -123,7 +117,7 @@ def render_report(start: str, end: str, results: dict[str, object]) -> str:
 
 - 需要用户解释的计划变化：
 - 需要核对的操作与规则：
-- 是否允许对已确认文本使用 AI 摘要：待确认。
+- 后续分析只使用固定脱敏事实包，并遵守当前分析缓存与确认门。
 
 ## 下周待讨论
 
@@ -136,22 +130,18 @@ def main() -> int:
     args = parse_args()
     try:
         validate_dates(args.start, args.end)
-        if is_in_git_worktree(args.output):
-            raise ValueError("--output must be outside a Git worktree")
         commands = command_set(args.longbridge_bin, args.start, args.end)
         if args.dry_run:
             for name, command in commands.items():
                 print(f"{name}: {' '.join(command)}")
             return 0
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        results = {name: run_json(command, args.output.parent) for name, command in commands.items()}
+        output_path = prepare_private_output(args.output)
+        results = {name: run_json(command, output_path.parent) for name, command in commands.items()}
         report = render_report(args.start, args.end, results)
-        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
-        temporary.write_text(report, encoding="utf-8")
-        temporary.replace(args.output)
-        print(f"PASS: wrote L1-only review draft to {args.output}")
+        write_owner_only_text(output_path, report)
+        print(f"PASS: wrote L1-only review draft to {output_path}")
         return 0
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, PrivateRuntimeError, RuntimeError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
 

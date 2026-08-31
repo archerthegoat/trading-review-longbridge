@@ -16,6 +16,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from private_runtime_io import PrivateRuntimeError, prepare_private_output, write_owner_only_text
+
 
 DEFAULT_SYMBOLS = ("QQQ.US", "VOO.US", "SOXX.US", "DRAM.US")
 
@@ -47,11 +49,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def is_in_git_worktree(path: Path) -> bool:
-    resolved = path.expanduser().resolve()
-    return any((parent / ".git").exists() for parent in (resolved.parent, *resolved.parents))
-
-
 def validate_date(value: str, option: str) -> date:
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -62,8 +59,9 @@ def validate_date(value: str, option: str) -> date:
 def run_json(command: list[str], cwd: Path) -> object:
     result = subprocess.run(command, check=False, capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
-        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "no stderr"
-        raise RuntimeError(f"Longbridge read failed ({' '.join(command[1:3])}): exit {result.returncode}; {detail}")
+        raise RuntimeError(
+            f"Longbridge read failed ({' '.join(command[1:3])}): exit {result.returncode}"
+        )
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:
@@ -237,7 +235,7 @@ def render_report(
             + (f"｜{detail}" if detail else "")
         )
     if not event_lines:
-        event_lines.append("- 该日期窗口未返回财报或 3 星宏观事件。")
+        event_lines.append("- 无已确认事件（相关筛选后）；公开事件查询成功且窗口过滤后为空。")
 
     news_lines: list[str] = []
     for symbol in symbols:
@@ -261,7 +259,6 @@ def render_report(
 - 账户数据：本次未读取或同步任何账户持仓事实。
 - 市场日线日期：{as_of}；EMA 历史样本起点：{history_start}。
 - 事件/新闻保留窗口：{as_of} 至 {event_end}。Longbridge 的宏观接口可能超出 `--end` 返回，脚本按日期二次过滤。
-- “695”标的：暂按 QQQ.US 做数值候选校验，尚未得到用户明确 ticker 确认。
 
 ## 日线与 EMA（公开市场事实）
 
@@ -269,12 +266,11 @@ def render_report(
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 {chr(10).join(table_rows) if table_rows else '| 无 | | | | | | | | | |'}
 
-## 对用户口述点位的机械对照
+## 机械判断边界
 
-- QQQ.US 候选：周五最高价是否落在 695 附近可由日线确认；日线 OHLC 不能证明“多次测试失败”，也不能证明你说的 705/710 是 50% 反弹或止损聚集区。
-- VOO.US：收盘是否高于 685 可由日线直接检查；是否高于 20EMA 由上表 EMA 检查，未读取任何 VOO 持仓。
-- SOXX.US：周五最高价是否进入 532–533 区间可由日线检查；冲高回落可由开/高/收的关系描述，但“相对指数更弱”需要选择比较基准和同一收益口径，不能仅凭单根 K 线断言。
-- DRAM.US：本次只对齐价格与公开事件，不读取你的成本约 60，也不推断你的仓位；50% 反弹/多空分界点的具体数值仍待你提供或确认。
+- 日线 OHLC 与 EMA 只能支持同口径价格和趋势检查，不能单独证明盘中多次测试、止损聚集或事件因果。
+- 相对强弱必须先确认比较基准、同一时间窗口和收益口径；单根 K 线不构成相对强弱结论。
+- 本脚本不读取账户、持仓、成本或计划，不能把公开市场数据解释为个人计划已触发或已执行。
 
 ## 事件与新闻（事实层，不作因果归因）
 
@@ -291,7 +287,7 @@ def render_report(
 ## 状态
 
 - 已完成：{len(symbols)} 个公开标的的周五日线、EMA 机械计算、事件窗口过滤和新闻标题抓取。
-- 待用户确认：695 对应的真实 ticker；是否把宏观事件/新闻纳入每日复盘；VOO/SOXX/DRAM 的比较基准与具体分界点。
+- 待确认：观察池来源、比较基准、事件相关性和任何计划分界点。
 - 未验证：任何账户持仓、成本、仓位、历史减仓计划执行情况；没有进行账户对账。
 - 可选接口异常：
 {optional_error_text}
@@ -308,12 +304,10 @@ def main() -> int:
             raise ValueError("--history-start must be on or before --date")
         if event_end_date < as_of_date:
             raise ValueError("--event-end must be on or after --date")
-        if is_in_git_worktree(args.output):
-            raise ValueError("--output must be outside a Git worktree")
+        output_path = prepare_private_output(args.output)
         symbols = list(dict.fromkeys(symbol.upper() for symbol in args.symbols))
-        args.output.parent.mkdir(parents=True, exist_ok=True)
         base = args.longbridge_bin
-        working_directory = args.output.parent
+        working_directory = output_path.parent
         static_rows = {
             string_value(item.get("symbol"), "").upper(): item
             for item in list_records(run_json([base, "static", *symbols, "--format", "json", "--lang", "zh-CN"], working_directory))
@@ -423,12 +417,10 @@ def main() -> int:
             news,
             optional_errors,
         )
-        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
-        temporary.write_text(report, encoding="utf-8")
-        temporary.replace(args.output)
-        print(f"PASS: wrote private market alignment to {args.output}")
+        write_owner_only_text(output_path, report)
+        print(f"PASS: wrote private market alignment to {output_path}")
         return 0
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, PrivateRuntimeError, RuntimeError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
 
