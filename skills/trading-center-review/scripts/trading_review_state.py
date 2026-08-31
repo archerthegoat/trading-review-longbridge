@@ -800,6 +800,28 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
         raise StateMigrationError("SQLite foreign_key_check failed")
 
 
+@contextlib.contextmanager
+def read_state_store(
+    path: Path = DEFAULT_STATE_DB, *, test_root: Optional[Path] = None,
+) -> Iterator["StateStore"]:
+    """Read one consistent current-schema snapshot without creating or migrating it."""
+    resolved = validate_state_db_path(path, test_root=test_root)
+    if not resolved.is_file():
+        raise UnsafeStatePathError("read-only state database does not exist")
+    connection = sqlite3.connect(resolved.as_uri() + "?mode=ro", uri=True, timeout=5)
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            raise StateMigrationError("read-only state requires the current schema; migrate separately")
+        _validate_schema(connection)
+        yield StateStore(connection, resolved)
+    finally:
+        # Do not call StateStore.close(): its writable lifecycle chmods companions.
+        connection.close()
+
+
 def open_state_store(
     path: Path = DEFAULT_STATE_DB,
     *,

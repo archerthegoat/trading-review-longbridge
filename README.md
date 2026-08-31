@@ -2,7 +2,13 @@
 
 中文优先的交易中心复盘 Skill。它把 Longbridge 授权只读事实、已确认计划、Codex 条件式判断、数据缺口和用户确认状态分开，并用 owner-only SQLite 复用已完成交易日的白名单事实。
 
-本仓库保持 Skill-first，不包含 Plugin、MCP server、Codex App、marketplace、后台服务、账户数据或运行时状态。
+本仓库保持 Skill-first，不包含 Plugin、MCP server、Codex App、marketplace、账户数据或运行时状态。提供用户明确批准后才安装的本地只读展示服务；Skill 安装本身不启动后台进程。
+
+## 本地常驻 UI
+
+已批准启用时，用正式发布入口将同一日/周 V2 保存到 Git/Vault 外的 owner-only 展示目录，地址为 `http://127.0.0.1:8765/`。用户级 LaunchAgent 在登录后启动；关闭 Codex 不会关掉页面服务。原 SQLite 不迁移，周度不随每日重新计算，页面生成、发布和常驻 HTTP 现由 TypeScript 实现，Python/SQLite 保留为数据边界。Obsidian 是确认后由知识中心接收的独立单向桥接，不是网页写接口；其准确 Schema/模板门禁见新架构报告。
+
+完整决策与验收见 [TS 与 Obsidian 架构报告](docs/architecture/ts-web-and-obsidian-bridge.md)。发布、重建、安装、状态、启停和回滚命令见 [本地展示服务指引](skills/trading-center-review/references/local-web-service.md)。常驻只保证服务入口，不等于数据自动更新或人工验收通过。
 
 ## 安装
 

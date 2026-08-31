@@ -22,6 +22,7 @@
 5. 运行 `daily-analysis-plan`。`run_codex` 才生成新 Codex 固定 JSON；`reuse` 原样使用缓存中的 model、status、generated_at 和 output。
 6. 把选定分析与同一事实包合并为 `trading-review-incremental-input.v1`，运行 `ingest-daily` 并回读 `run-manifest.json`。
 7. 用同一事实边界生成私有 Markdown、V2 JSON 和 standalone HTML。
+8. 当前机器已明确安装常驻服务时，读取 [本地展示发布指引](local-web-service.md)，用 `node skills/trading-center-review/web/cli.ts publish --daily-input ...` 发布；未提供新周度输入时复用持久周度。未启用服务则保持私有 HTML，不自行安装或改调度。
 
 生成页面前可只读最近周度 revision，用同一 renderer 合入原模块；不刷新周度时间、不写周度表。计划区间由已保存版本提供，`trade_plan_lifecycle.py enrich-daily` 只把区间卡片合入既有标的行。quote 只更新关系，不能移动区间；构造新 draft 或确认版本不是每日自动动作。
 

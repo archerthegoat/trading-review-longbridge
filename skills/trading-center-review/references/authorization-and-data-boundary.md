@@ -44,6 +44,8 @@ Skill 本身不产生权限。当前默认可例行同步的最小事实是 posi
 
 V2 HTML 和 JSON 输出必须在该私有根目录下且位于 Git 工作树之外。输出文件权限为 0600，父目录权限为 0700，写入使用临时文件和原子改名。
 
+2026-08-31 用户明确批准的限定例外：通过正式发布命令，将严格删去账户模块/标签/时间、后台说明、委托计数及无成交行的固定展示快照与 HTML 保存到 `~/Library/Application Support/MarsTradingCenter/web-ui/`。仍为 0700/0600，不能复制完整输入包或原始响应。只读 LaunchAgent 提供 `127.0.0.1:8765`，不新增采集/调度/券商/数据库写入或 Obsidian 权限。详见 [本地展示服务](local-web-service.md) 及 `docs/architecture/ts-web-and-obsidian-bridge.md`。TS 负责渲染/发布/HTTP，Python 保留证据校验；Bridge 范围另经批准但准确 Schema/模板仍待确认。其他运行保持原默认边界。
+
 项目内允许保留：
 
 - Skill 和 references。

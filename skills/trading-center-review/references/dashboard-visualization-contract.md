@@ -17,6 +17,8 @@ python3 skills/trading-center-review/scripts/render_trade_review_dashboard_v2.py
 
 输入和输出都必须位于 /private/tmp/trading-center-review-runtime 下，并且不在任何 Git 工作树内。渲染器使用临时文件、原子改名和 0600 文件权限。
 
+以上是原始私有渲染边界；用户明确启用常驻展示后，另由 [正式发布入口](local-web-service.md) 生成账户字段已剔除的 `trading-review-display.v1` 派生快照，并在固定 owner-only 目录提供同一 HTML。独立展示 Schema 严格允许 `schema_version/daily/weekly`，daily 不含 account/data_note，meta 不含账户标签/时间，operations 不含 orders/reconciliation 且只保留明确美股成交。周度不持久保留未渲染的 operations/data_note 列表。不能放宽原 renderer 的临时输入路径或补假账户通过校验。页面布局、时间和人工验收门不因安装服务改变。
+
 ## 2. 视觉与信息架构
 
 视觉目标是 docs/design/trading-center-web-ui-v2-option-2.png，即方案 2“风险雷达双栏”。

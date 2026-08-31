@@ -5,7 +5,7 @@ description: 基于 Longbridge 授权只读事实、已确认周计划和 owner-
 
 # 交易中心复盘
 
-把交易事实、计划、Codex 判断、数据缺口和用户确认状态放在一条可追溯链路中。默认保持 Skill-first：不创建 Plugin、MCP、Codex App、marketplace 或后台服务。
+把交易事实、计划、Codex 判断、数据缺口和用户确认状态放在一条可追溯链路中。默认保持 Skill-first：不创建 Plugin、MCP、Codex App 或 marketplace。后台服务不自动安装；仅在明确批准时启用只读本地展示服务，不增加采集或交易权限。
 
 ## 选择运行模式
 
@@ -22,6 +22,7 @@ description: 基于 Longbridge 授权只读事实、已确认周计划和 owner-
 - 周度复盘：读取 [周度复盘工作流](references/weekly-review-workflow.md)、[Longbridge 导入契约](references/longbridge-import-contract.md) 与 [V2 看板契约](references/dashboard-visualization-contract.md)。
 - 市场、计划或交易解释：读取 [Codex 分析边界](references/analysis-skill-routing.md)。
 - 构造或确认价格区间计划：读取 [EMA 计划与生命周期](references/trade-plan-workflow.md)。
+- 用户已批准本地常驻展示、发布或维护：读取 [本地展示服务](references/local-web-service.md)；只操作固定目录和该服务的 LaunchAgent。
 - 用户确认后准备知识交接：读取 [知识中心交接边界](references/knowledge-handoff-contract.md)。
 - 仅当用户显式要求过渡期 Feishu Wiki 写入时，才读取 [Wiki 记录结构](references/feishu-wiki-record-structure.md)。
 
@@ -51,7 +52,7 @@ description: 基于 Longbridge 授权只读事实、已确认周计划和 owner-
 每日先生成采集计划：
 
 ~~~bash
-python3 skills/trading-center-review/scripts/run_incremental_review.py daily-plan \
+/usr/bin/python3 -B skills/trading-center-review/scripts/run_incremental_review.py daily-plan \
   --review-date <America/New_York 已完成交易日> \
   --plan-file <当前周计划> \
   --source-contract-version <版本> \
@@ -63,7 +64,7 @@ python3 skills/trading-center-review/scripts/run_incremental_review.py daily-pla
 采集端必须先把 Longbridge 结果投影为不含模型输出的 `trading-review-incremental-facts.v1` 固定脱敏包，并在调用 Codex 前执行：
 
 ~~~bash
-python3 skills/trading-center-review/scripts/run_incremental_review.py daily-analysis-plan \
+/usr/bin/python3 -B skills/trading-center-review/scripts/run_incremental_review.py daily-analysis-plan \
   --input /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/daily-facts.json \
   --output /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/analysis-plan.json
 ~~~
@@ -71,7 +72,7 @@ python3 skills/trading-center-review/scripts/run_incremental_review.py daily-ana
 只有 `action=run_codex` 才生成新分析；`action=reuse` 必须原样使用 `cached_analysis` 的 model、status、generated_at 和 output。把选定分析与同一事实包合并为 `trading-review-incremental-input.v1` 后再执行：
 
 ~~~bash
-python3 skills/trading-center-review/scripts/run_incremental_review.py ingest-daily \
+/usr/bin/python3 -B skills/trading-center-review/scripts/run_incremental_review.py ingest-daily \
   --input /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/daily-input.json \
   --manifest /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/run-manifest.json
 ~~~
@@ -94,6 +95,8 @@ Codex 分析缓存键固定为：
 4. 不含账户数值、仓位数量或标的级事实的 `trading-review-run-manifest.v1`。
 
 运行草稿校验和 V2 renderer。每日对话只交付通过 Schema、隐私和离线检查的 HTML 链接及简短状态；Markdown、完整事件工件和账户事实留在私有目录。
+
+本机已明确启用常驻展示时，通过 `node skills/trading-center-review/web/cli.ts publish` 发布同一校验结果，交付 `http://127.0.0.1:8765/`；日度未指定周度输入则复用持久周度内容。不能回到手写临时服务器交付，不能把服务常驻当成自动生成新数据。未安装时仍使用私有 HTML 工件，不自行安装。
 
 V2 页面固定为市场风险雷达约 42% / Codex 判断约 58%，随后是上一交易日成交、持仓 × 计划、全宽事件和折叠数据说明。成交区只展示有明确成交证据的美股记录，不显示未成交委托、订单计数或周度操作摘要。账户字段继续进入私有 Schema 校验和 Codex 输入，但不渲染账户概览、金额、基础币种、快照时间或金额显隐控件。
 
@@ -132,10 +135,12 @@ SQLite v3 追加计划版本、区间、trade episode 分类和执行指标。�
 ## 本地验证
 
 ~~~bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-PYTHONDONTWRITEBYTECODE=1 python3 \
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 \
   /Users/archer/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   skills/trading-center-review
 ~~~
+
+TS 展示与服务另执行 `npm ci --ignore-scripts`、`npm run typecheck`、`npm run test:web`；生产运行不依赖 node_modules，要求可执行的原生 Node 24.12+。迁移电脑后必须核验实际架构，不能沿用失效的 Intel 命令路径。
 
 校验通过只证明代码和固定契约满足测试，不证明 Longbridge 覆盖、账户对账、真实 shadow、Wiki/Obsidian 写入或人工浏览器验收成功。

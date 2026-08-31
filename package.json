@@ -1,0 +1,14 @@
+{
+  "name": "trading-review-local-web",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.12.0" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:web": "node --test tests/web/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.9.3"
+  }
+}

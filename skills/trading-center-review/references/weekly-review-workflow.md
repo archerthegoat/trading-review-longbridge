@@ -16,6 +16,7 @@
 6. 新私有输入使用 `trading-review-weekly-private-facts.v2`，不含账户/P&L 模块。`project_weekly_review.py` 输出 `trading-review-weekly-state.v2`；旧私有 v1 仅兼容读取，其盈亏字段被丢弃。
 7. `ingest-weekly` 追加 SQLite v3 revision，验证全部分类能与当前 hash 校验的日分区对应。旧 P&L 表不写入。
 8. 从 SQLite 回读 `weekly-dashboard-packet`；与合格每日包交给同一个 V2 renderer，生成单页 HTML。缺每日包则 blocked，不生成周度专用页。
+9. 已明确启用常驻服务时，按 [正式发布指引](local-web-service.md) 发布这份经过范围和内容核验的日/周页面；可复用持久日度展示快照，但它的源日期必须覆盖所回看的完整周度窗口。旧 DB 未保存的 UI 文案/范围声明仍须明确核验，不补造。
 
 历史 revision 的源时间不刷新。日分区被修订时，旧周度只派生 stale；每日不追加周度 revision，不重算周度指标。
 

@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 SCHEMA_VERSION = "trading-review-dashboard.v2"
 WEEKLY_SCHEMA_VERSION = "trading-review-weekly-dashboard.v2"
+DISPLAY_SCHEMA_VERSION = "trading-review-display.v1"
 BODY_MARKER = "<!--__TRADING_REVIEW_DASHBOARD_V2_BODY__-->"
 PRIVATE_ROOT = Path("/private/tmp/trading-center-review-runtime").resolve()
 DEFAULT_TEMPLATE = (
@@ -430,41 +431,20 @@ def _security_scan(value: Any, path: str = "$") -> None:
             raise DashboardRenderError(f"{path} contains a forbidden internal UI state")
 
 
-def _validate_meta(value: Any) -> Dict[str, Any]:
+def _validate_meta(value: Any, *, display_only: bool = False) -> Dict[str, Any]:
     path = "$.meta"
     item = _object(value, path)
-    _reject_unknown(
-        item,
-        {
-            "review_label",
-            "account_label",
-            "review_date",
-            "generated_at",
-            "market_as_of",
-            "account_snapshot_at",
-            "previous_trading_window",
-            "period_label",
-            "overall_status",
-        },
-        path,
-    )
-    _required_keys(
-        item,
-        {
-            "review_label",
-            "account_label",
-            "review_date",
-            "generated_at",
-            "market_as_of",
-            "account_snapshot_at",
-            "previous_trading_window",
-            "period_label",
-            "overall_status",
-        },
-        path,
-    )
+    keys = {
+        "review_label", "review_date", "generated_at", "market_as_of",
+        "previous_trading_window", "period_label", "overall_status",
+    }
+    if not display_only:
+        keys |= {"account_label", "account_snapshot_at"}
+    _reject_unknown(item, keys, path)
+    _required_keys(item, keys, path)
     _text(item["review_label"], f"{path}.review_label")
-    _text(item["account_label"], f"{path}.account_label")
+    if not display_only:
+        _text(item["account_label"], f"{path}.account_label")
     review_date = _date_text(item["review_date"], f"{path}.review_date")
     review_day = dt.date.fromisoformat(review_date)
     if review_day.weekday() >= 5:
@@ -476,7 +456,7 @@ def _validate_meta(value: Any) -> Dict[str, Any]:
         SHANGHAI_TZ,
         f"{path}.generated_at",
     )
-    for key in ("market_as_of", "account_snapshot_at"):
+    for key in (("market_as_of",) if display_only else ("market_as_of", "account_snapshot_at")):
         _display_timestamp(item[key], f"{path}.{key}")
     _text(item["period_label"], f"{path}.period_label")
     _enum(item["overall_status"], OVERALL_STATUSES, f"{path}.overall_status")
@@ -766,66 +746,49 @@ def _validate_count_block(value: Any, path: str) -> Dict[str, Any]:
     return block
 
 
-def _validate_operations(value: Any) -> Dict[str, Any]:
+def _validate_operations(value: Any, *, display_only: bool = False) -> Dict[str, Any]:
     path = "$.operations"
+    keys = {"title", "window_label", "executions", "items"}
+    if not display_only:
+        keys |= {"orders", "reconciliation"}
     item = _validate_status_module(
-        value,
-        path,
-        {"title", "window_label", "orders", "executions", "items", "reconciliation", "market_scope"},
+        value, path, keys | {"market_scope"},
     )
-    _required_keys(
-        item,
-        {"title", "window_label", "orders", "executions", "items", "reconciliation"},
-        path,
-    )
+    _required_keys(item, keys, path)
     _text(item["title"], f"{path}.title")
     _text(item["window_label"], f"{path}.window_label")
     if "market_scope" in item:
         _enum(item["market_scope"], {"US"}, f"{path}.market_scope")
-    item["orders"] = _validate_count_block(item["orders"], f"{path}.orders")
     item["executions"] = _validate_count_block(item["executions"], f"{path}.executions")
-    child_statuses = [item["orders"]["data_status"], item["executions"]["data_status"]]
-    _text(item["reconciliation"], f"{path}.reconciliation")
+    blocks = [item["executions"]]
+    if not display_only:
+        item["orders"] = _validate_count_block(item["orders"], f"{path}.orders")
+        blocks.append(item["orders"])
+        _text(item["reconciliation"], f"{path}.reconciliation")
+    child_statuses = [block["data_status"] for block in blocks]
     rows = _array(item["items"], f"{path}.items")
     if item["status"] == "empty":
         if rows or any(
             block["data_status"] not in {"empty", "complete"}
             or block["count"] not in (None, 0)
-            for block in (item["orders"], item["executions"])
+            for block in blocks
         ):
             raise DashboardRenderError(f"{path} empty status cannot contain factual children")
     for index, raw in enumerate(rows):
         row_path = f"{path}.items[{index}]"
         row = _object(raw, row_path)
+        row_keys = {
+            "symbol", "display_name", "action", "role", "state",
+            "plan_relation", "data_status",
+        }
+        if not display_only:
+            row_keys.add("reconciliation")
         _reject_unknown(
             row,
-            {
-                "symbol",
-                "display_name",
-                "action",
-                "role",
-                "state",
-                "plan_relation",
-                "reconciliation",
-                "data_status",
-                "execution_count",
-            },
+            row_keys | {"execution_count"},
             row_path,
         )
-        _required_keys(
-            row,
-            {
-                "symbol",
-                "display_name",
-                "action",
-                "role",
-                "state",
-                "plan_relation",
-                "reconciliation",
-                "data_status",
-            },
-            row_path,
-        )
+        _required_keys(row, row_keys, row_path)
         data_status = _enum(row["data_status"], MODULE_STATUSES, f"{row_path}.data_status")
         child_statuses.append(data_status)
         if "execution_count" in row:
@@ -836,7 +799,10 @@ def _validate_operations(value: Any) -> Dict[str, Any]:
         if item.get("market_scope") == "US" and not US_SYMBOL_RE.fullmatch(row["symbol"]):
             raise DashboardRenderError("US operation scope cannot contain an unverified or non-US symbol")
         _text(row["display_name"], f"{row_path}.display_name")
-        for key in ("action", "role", "state", "plan_relation", "reconciliation"):
+        text_keys = ("action", "role", "state", "plan_relation")
+        if not display_only:
+            text_keys += ("reconciliation",)
+        for key in text_keys:
             _text(row[key], f"{row_path}.{key}", required=data_status != "empty")
             if data_status == "empty":
                 _require_empty_text(row[key], f"{row_path}.{key}")
@@ -1174,37 +1140,98 @@ def _validate_data_note(value: Any) -> Dict[str, Any]:
     return item
 
 
-def validate_packet(packet: Any) -> Dict[str, Any]:
+def validate_packet(packet: Any, *, display_only: bool = False) -> Dict[str, Any]:
     """Validate the complete V2 packet and return the same sanitized structure."""
 
     root = _object(packet, "$")
-    _reject_unknown(root, TOP_LEVEL_KEYS, "$")
-    _required_keys(root, TOP_LEVEL_KEYS, "$")
+    keys = TOP_LEVEL_KEYS - {"account", "data_note"} if display_only else TOP_LEVEL_KEYS
+    _reject_unknown(root, keys, "$")
+    _required_keys(root, keys, "$")
     _security_scan(root)
     source = copy.deepcopy(root)
-    validated_meta = _validate_meta(source["meta"])
+    validated_meta = _validate_meta(source["meta"], display_only=display_only)
     if validated_meta["overall_status"] == "blocked":
         raise DashboardRenderError("packet overall status is blocked")
     validated = {
         "meta": validated_meta,
         "market": _validate_market(source["market"]),
-        "account": _validate_account(source["account"]),
         "codex_analysis": _validate_analysis(source["codex_analysis"]),
-        "operations": _validate_operations(source["operations"]),
+        "operations": _validate_operations(source["operations"], display_only=display_only),
         "positions_plans": _validate_positions_plans(source["positions_plans"]),
         "events": _validate_events(source["events"]),
-        "data_note": _validate_data_note(source["data_note"]),
     }
-    for key in TOP_LEVEL_KEYS - {"meta"}:
+    if not display_only:
+        validated["account"] = _validate_account(source["account"])
+        validated["data_note"] = _validate_data_note(source["data_note"])
+    for key in keys - {"meta"}:
         if validated[key]["status"] == "blocked":
             raise DashboardRenderError(f"{key} status is blocked")
     if validated["meta"]["overall_status"] == "complete":
-        for key in TOP_LEVEL_KEYS - {"meta"}:
+        for key in keys - {"meta"}:
             if validated[key]["status"] in {"partial", "stale", "blocked"}:
                 raise DashboardRenderError(
                     f"complete overall status conflicts with {key} status"
                 )
     return validated
+
+
+def project_display_snapshot(daily_packet: Any, weekly_packet: Any = None) -> Dict[str, Any]:
+    """Validate original evidence first, then persist only the display boundary."""
+    daily = validate_packet(daily_packet)
+    daily.pop("account")
+    daily.pop("data_note")
+    daily["meta"].pop("account_label")
+    daily["meta"].pop("account_snapshot_at")
+    operations = daily["operations"]
+    operations.pop("orders")
+    operations.pop("reconciliation")
+    operations["items"] = [
+        {key: value for key, value in row.items() if key != "reconciliation"}
+        for row in operations["items"]
+        if _is_us(row["symbol"]) and (row.get("execution_count") or 0) > 0
+        and row["data_status"] not in {"empty", "blocked"}
+    ]
+    daily["positions_plans"]["items"] = [
+        row for row in daily["positions_plans"]["items"] if _is_us(row["symbol"])
+    ]
+    for module in (operations, daily["positions_plans"]):
+        if module["status"] in {"partial", "stale"} and not module.get("note", "").strip():
+            module["note"] = "原始覆盖状态保留；这里只保存相关展示内容。"
+    weekly = None if weekly_packet is None else project_weekly_display(weekly_packet)
+    return validate_display_snapshot({
+        "schema_version": DISPLAY_SCHEMA_VERSION, "daily": daily, "weekly": weekly,
+    })
+
+
+def project_weekly_display(packet: Any) -> Dict[str, Any]:
+    weekly = validate_weekly_packet(packet)
+    for section in ("operations", "data_note"):
+        weekly["sections"][section] = []
+    return weekly
+
+
+def validate_display_snapshot(snapshot: Any) -> Dict[str, Any]:
+    root = _object(snapshot, "$display")
+    keys = {"schema_version", "daily", "weekly"}
+    _reject_unknown(root, keys, "$display")
+    _required_keys(root, keys, "$display")
+    if root["schema_version"] != DISPLAY_SCHEMA_VERSION:
+        raise DashboardRenderError("unsupported display snapshot")
+    daily = validate_packet(root["daily"], display_only=True)
+    for row in daily["operations"]["items"]:
+        if not _is_us(row["symbol"]) or (row.get("execution_count") or 0) <= 0:
+            raise DashboardRenderError("display operations require confirmed US fills")
+    if any(not _is_us(row["symbol"]) for row in daily["positions_plans"]["items"]):
+        raise DashboardRenderError("display positions and candidates must be US-only")
+    weekly = None if root["weekly"] is None else validate_weekly_packet(root["weekly"])
+    if weekly is not None:
+        if weekly["meta"]["period_end"] > daily["meta"]["review_date"]:
+            raise DashboardRenderError("weekly evidence cannot extend beyond the daily review date")
+        if weekly["sections"]["operations"] or weekly["sections"]["data_note"]:
+            raise DashboardRenderError("display snapshot cannot retain unused weekly diagnostics")
+        if any(not _is_us(row["underlying"]) for row in weekly["review_episodes"]):
+            raise DashboardRenderError("display weekly episodes must be US-only")
+    return {"schema_version": DISPLAY_SCHEMA_VERSION, "daily": daily, "weekly": weekly}
 
 
 def _float_decimal(value: Any, path: str) -> float:
@@ -2330,6 +2357,17 @@ def render_unified_dashboard(
     _validate_template(template)
     daily = validate_packet(daily_packet)
     weekly = None if weekly_packet is None else validate_weekly_packet(weekly_packet)
+    return _render_validated_dashboard(daily, weekly, template)
+
+
+def render_display_snapshot(snapshot: Any, template: str) -> str:
+    """Rebuild the same UI without inventing or retaining private account fields."""
+    _validate_template(template)
+    validated = validate_display_snapshot(snapshot)
+    return _render_validated_dashboard(validated["daily"], validated["weekly"], template)
+
+
+def _render_validated_dashboard(daily: Dict[str, Any], weekly: Optional[Dict[str, Any]], template: str) -> str:
     daily_body = _render_daily_content(daily, weekly)
     body = f"""
       <div class="v2-shell">

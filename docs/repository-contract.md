@@ -32,7 +32,9 @@ trading-review-longbridge/
 - MCP server
 - Codex App
 - marketplace 条目
-- hooks 或常驻后台服务
+- hooks 或自动安装的后台服务
+
+2026-08-31 明确批准的例外是本地只读 V2 展示 LaunchAgent。源码和合成测试在仓库，固定安装、展示快照及日志在 Git/Vault 外；只绑定 127.0.0.1:8765，不增加数据库、采集、交易或 Obsidian 权限。安装和运行必须使用显式维护命令，Skill 安装不启用它。以 [TS 与 Obsidian 合并架构报告](architecture/ts-web-and-obsidian-bridge.md) 及 `references/local-web-service.md` 为当前边界。Bridge 实现范围已批准，正式字段与模板仍有独立准确文本门禁；未过门不写 Vault。
 
 Plugin 决策门见架构报告。未来 Plugin 只能包装现有 Skill，不能要求重写它或改变数据库格式。
 
@@ -52,6 +54,7 @@ Plugin 决策门见架构报告。未来 Plugin 只能包装现有 Skill，不�
 - V1 renderer、模板和测试保留为回滚线。
 - V2 只消费严格固定 JSON，拒绝未知字段、敏感字段/值、外部 URL、脚本、iframe、运行时网络和 Git 内输入输出。
 - V2 私有 account 模块继续校验，但不渲染账户概览、金额、基础币种、账户快照时间或金额控件。
+- 常驻发布先校验完整私有包，再派生固定账户字段剔除快照；重建由 TS 复用同一 V2 模板和展示语义，Python 保留证据校验，不伪造 account 通过 Schema。服务不直接读库，显式周度发布可通过只读事务回读最新 revision。
 - 每日与周度共用一个 V2 renderer/template 和原每日骨架；不设置日/周切换或独立 panel。无周度显示“尚未生成”，无合格每日包禁止生成页面。周度执行指标 blocked 可在单页中显示明确缺口。
 - 计划统一 EMA20/50/200，增加右侧 bottom_reversal；pre_entry 不含 add，实际买入核验后才可生成 position_management 草案并再次确认。
 - Codex 只读取脱敏固定事实，按 `facts_hash + plan_hash + analysis_contract_version` 缓存。
@@ -73,6 +76,7 @@ Plugin 决策门见架构报告。未来 Plugin 只能包装现有 Skill，不�
 ## 迁移与回滚
 
 - 源码基线为 `codex/trading-review-semantics@3e9bafb`，实施分支为 `codex/trading-review-incremental-state`。
+- 上述为恢复阶段历史；已于 2026-08-31 收敛并推送到 `main@9474b6c`，GitHub 默认分支随后明确批准切换为 main。旧分支保留，不删除历史。
 - 损坏的旧 `web-ui-v2` 只作恢复证据，不修补其 Git 元数据。
 - 不复制日志、runtime、records、broker 数据、缓存或 `__pycache__`。
 - 数据库迁移前生成 owner-only 备份；失败回滚并保持旧库。

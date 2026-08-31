@@ -36,3 +36,20 @@ jobs:
           node-version: 20
       - name: Verify npx skill discovery
         run: npx --yes skills add . --list
+
+  ts-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install type-checking tools only
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify the Python data adapter runtime
+        run: /usr/bin/python3 --version
+      - name: Type check
+        run: npm run typecheck
+      - name: Check TS rendering, publication and HTTP boundaries
+        run: npm run test:web
