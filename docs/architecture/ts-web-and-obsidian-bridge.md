@@ -413,7 +413,7 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 
 修复后新鲜 LunaMax 只读复核以上表和定向反例：F1–F3、F5–F8 全部 **CLOSED**，未发现由这些修复直接引入的 P0–P3 缺陷；F4 保持 **OPEN / PENDING HUMAN DECISION**。它判定当前修订可形成“不部署、不处理 F4”的安全 partial checkpoint，不构成部署放行、真实 Bridge 首写或人工验收。reviewer 的隔离边界未访问真实状态库、Vault、Library 或私有运行目录；主 Agent 的全量 211/23 自动回归与官方文档核对是分开证据。
 
-批准状态：需求与本地部署 **APPROVED**；F1–F3、F5–F8 修复后独立复核 **PASS**；F4 最小展示方案人类批准与独立架构复核 **PASS / IMPLEMENTATION PENDING**；本轮重新部署 **PENDING**；真实日记首写 **NOT RUN**；人工验收 **PENDING**。
+批准状态：需求与本地部署 **APPROVED**；F1–F3、F5–F8 修复后独立复核 **PASS**；F4 最小展示方案人类批准、独立架构复核与实现自动检查 **PASS**；本轮重新部署 **PENDING**；真实日记首写 **NOT RUN**；人工验收 **PENDING**。
 
 ### 11.7 F4 最小处理：复用现有展示合同
 
@@ -427,10 +427,12 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 - 工具、trade_symbol、underlying 和 observation_symbol 继续复用现有结构化匹配与具体期权身份拒绝；Python 的美股展示边界允许普通 `.US` ticker 与脱敏 `.US:OPTION` 投影，但仍拒绝具体期权合约。不匹配输入在 Python 边界拒绝，TS 不猜测、不修复。
 - 本轮不生成或修改 weekly episode、周度统计或合规结论；既有周度区域只渲染另一路已验证周度状态，不根据当前日度 context 重算或压制。
 - 历史 publication 继续返回原不可变 HTML；新输入不会回填旧发布。部署时间不改行情、估值或周度来源时间。
-- 最小实现只触碰既有 Python 展示校验/渲染、TS 类型/渲染及各一个定向回归；不改 StateStore、计划构造、确认、Bridge、outbox、receiver 或 Obsidian。
+- 最小实现只触碰既有 Python 展示边界/渲染、TS 渲染及各一个定向回归；不改 StateStore、计划构造、确认、Bridge、outbox、receiver 或 Obsidian。
 
 已接受的限制：新的日度输入若没有携带上下文，页面只能显示未知/待确认；本轮不自动沿用上一日上下文。只有真实重复使用证明这造成持续操作成本时，才重新讨论独立持久化，并重新经过人类架构决策。
 
 失败与回滚边界沿现有 v5/display v1 合同：非法 context 整个投影 fail closed；只有 context 的行不得显示计划派生内容；删除本轮展示代码并回到上一 publication 即可回滚，无数据库恢复。自动检查只需证明合法 4H/null 能显示但不产生计划内容、计划 context 优先且触发周期完整、脱敏 LEAP 行保留、非法工具映射被拒绝、既有 plan 展示不回归。人工验收继续执行第 11.5 节的单标签 Browser 清单，重点记录“有计划 / 仅观察口径 / 周期待确认”三种状态；当前真实数据没有的状态记 **NOT RUN**，不为验收修改真实交易或确认。
 
 新鲜非作者 LunaMax 对精确 diff `b9726734c53c711c808ea2eb57acf67e6b034cb9e82eebc61b7dc4adec38572e` 的窄范围只读复核为 **ARCHITECTURE REVIEW PASS**；该结论只覆盖本节合同，不代表实现、部署、Browser 或人工验收通过。
+
+实现仅修改两个 Python 展示文件、一个 TS renderer 和各一个定向测试：无计划 context 现在显示“观察口径（非交易计划）”并压制计划派生内容；plan 内 context 优先；触发周期始终显示；脱敏 `.US:OPTION` 不再被 Python 投影删除。全量 212 项 Python、24 项 TS、`tsc --noEmit`、Skill 校验与 diff whitespace 检查均 **PASS**。这些是自动证据；本轮部署 **NOT RUN**，Browser 与人工验收继续 **PENDING**。

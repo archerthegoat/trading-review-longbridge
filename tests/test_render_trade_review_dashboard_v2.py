@@ -252,6 +252,34 @@ class DashboardV2RendererTests(unittest.TestCase):
         self.assertIn('class="v2-trigger v2-tone-amber"', rendered)
         self.assertNotIn('class="v2-trigger v2-tone-red"', rendered)
 
+    def test_observation_context_is_neutral_and_keeps_sanitized_leap(self):
+        packet = fixture("complete")
+        row = packet["positions_plans"]["items"][0]
+        packet["positions_plans"]["items"] = [row]
+        underlying = row["symbol"]
+        row.update(symbol=underlying + ":OPTION", valuation=None)
+        row["instrument"] = {"tool_kind": "leap_call", "underlying": underlying}
+        row["execution_context"] = {
+            "tool_kind": "leap_call", "trade_symbol": underlying + ":OPTION",
+            "observation_symbol": underlying, "observation_timeframe": "4H",
+            "trigger_timeframe": "4H", "trigger_basis": "bar_close", "exception_note": None,
+        }
+        row["plan_coverage"] = "不应出现的计划覆盖"
+        row["trigger_distance"] = {"label": "不应出现的触发距离", "value": "不应出现的距离值", "tone": "red"}
+        row["signals"] = ["不应出现的验证信号"]
+        row["invalidation"] = ["不应出现的失效条件"]
+        row["next_checks"] = ["不应出现的计划检查"]
+        projected = MODULE.project_display_snapshot(packet)
+        self.assertEqual(projected["daily"]["positions_plans"]["items"][0]["symbol"], underlying + ":OPTION")
+        body = MODULE.render_display_snapshot(projected, TEMPLATE_PATH.read_text(encoding="utf-8")).split("<body>", 1)[1]
+        self.assertIn("观察口径（非交易计划）", body)
+        self.assertIn("观察周期：4小时线 · 触发周期：4小时线 · 触发方式：收线确认", body)
+        self.assertIn("不生成自动触发", body)
+        for marker in ("不应出现的计划覆盖", "不应出现的触发距离", "不应出现的距离值", "不应出现的验证信号", "不应出现的失效条件", "不应出现的计划检查"):
+            self.assertNotIn(marker, body)
+        self.assertNotIn('class="v2-plan-checks"', body)
+        self.assertNotIn("v2-near-trigger", body)
+
     def test_proxy_semantics_are_required_and_visible(self):
         packet = fixture("complete")
         MODULE.validate_packet(packet)

@@ -200,7 +200,7 @@ PRIVATE_DIAGNOSTIC_RE = re.compile(
     r"/private/|/Users/)", re.IGNORECASE,
 )
 NON_US_SYMBOL_RE = re.compile(r"\b[A-Z0-9][A-Z0-9.\-]*\.(?:HK|SH|SZ|SG|JP)\b", re.IGNORECASE)
-US_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]*\.US$", re.IGNORECASE)
+US_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]*\.US(?::OPTION)?$", re.IGNORECASE)
 FED_CALENDAR_HOSTS = frozenset({
     "federalreserve.gov", "newyorkfed.org", "bostonfed.org", "philadelphiafed.org",
     "clevelandfed.org", "richmondfed.org", "atlantafed.org", "chicagofed.org",
@@ -1955,6 +1955,11 @@ def _render_plan_detail(detail: Optional[Mapping[str, Any]]) -> str:
 
 
 def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
+    detail = row.get("plan_detail")
+    row_context = row.get("execution_context")
+    context = detail.get("execution_context") if detail else None
+    context = context or row_context
+    observation_only = detail is None and row_context is not None
     trigger = row["trigger_distance"]
     trigger_tone = trigger["tone"]
     if not allow_verified_tone and trigger_tone in {"red", "green"}:
@@ -1967,7 +1972,7 @@ def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
     classes = [
         "v2-plan-row",
         f'v2-tab-{row["tab"]}',
-        "v2-near-trigger" if row["near_trigger"] else "",
+        "v2-near-trigger" if row["near_trigger"] and not observation_only else "",
         "v2-has-gap" if row["has_gap"] else "",
     ]
     classes = " ".join(value for value in classes if value)
@@ -1980,18 +1985,15 @@ def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
     display_name = _ui(row["display_name"])
     symbol_note = f"<small>{symbol}</small>" if symbol != display_name else ""
     detail_label = "查看持仓计划" if row["tab"] == "holdings" else "查看买入计划"
-    if not row.get("plan_detail"):
+    if not detail:
         detail_label = "查看观察条件与下一步"
-    context = row.get("execution_context")
-    context_html = f'<div class="v2-execution-context"><small>{_escape(instruments.context_text(context))}</small></div>' if context else '<div class="v2-execution-context"><small>交易工具与观察周期：待确认</small></div>'
-    return f"""
-      <div class="{classes}" data-tab="{_escape(row["tab"])}">
-        <div class="v2-plan-symbol"><strong>{display_name}</strong>{symbol_note}</div>
-        <div class="v2-plan-role"><strong>{_ui(row["role"], "持仓" if row["tab"] == "holdings" else "买入候选")}</strong><small>{_ui(row["holding_state"], "本次读取时持仓" if row["tab"] == "holdings" else "尚未持有")}</small></div>
-        <div class="v2-plan-coverage">{_ui(row["plan_coverage"], "计划待确认")}</div>
-        <div class="v2-trigger v2-tone-{_escape(trigger_tone)}"><small>{_ui(trigger["label"], "触发条件")}</small><strong>{_ui(trigger["value"], "待确认")}</strong></div>
-        {_render_valuation(row)}
-        {context_html}
+    context_text = instruments.context_text(context) if context else "交易工具与观察周期：待确认"
+    if observation_only:
+        context_text = "观察口径（非交易计划） · " + context_text
+    context_html = f'<div class="v2-execution-context"><small>{_escape(context_text)}</small></div>'
+    coverage_html = '<div class="v2-plan-coverage">非交易计划</div>' if observation_only else f'<div class="v2-plan-coverage">{_ui(row["plan_coverage"], "计划待确认")}</div>'
+    trigger_html = '<div class="v2-trigger v2-tone-neutral"><small>观察口径</small><strong>不生成自动触发</strong></div>' if observation_only else f'<div class="v2-trigger v2-tone-{_escape(trigger_tone)}"><small>{_ui(trigger["label"], "触发条件")}</small><strong>{_ui(trigger["value"], "待确认")}</strong></div>'
+    checks_html = "" if observation_only else f"""
         <details class="v2-plan-checks">
           <summary>{detail_label}</summary>
           <div class="v2-plan-check-grid">
@@ -2000,8 +2002,18 @@ def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
             <div class="v2-plan-list"><strong>下一步检查</strong>{list_text(row["next_checks"], "先确认计划")}</div>
           </div>
           {gap}
-          {_render_plan_detail(row.get("plan_detail"))}
+          {_render_plan_detail(detail)}
         </details>
+    """
+    return f"""
+      <div class="{classes}" data-tab="{_escape(row["tab"])}">
+        <div class="v2-plan-symbol"><strong>{display_name}</strong>{symbol_note}</div>
+        <div class="v2-plan-role"><strong>{_ui(row["role"], "持仓" if row["tab"] == "holdings" else "买入候选")}</strong><small>{_ui(row["holding_state"], "本次读取时持仓" if row["tab"] == "holdings" else "尚未持有")}</small></div>
+        {coverage_html}
+        {trigger_html}
+        {_render_valuation(row)}
+        {context_html}
+        {checks_html}
       </div>
     """
 

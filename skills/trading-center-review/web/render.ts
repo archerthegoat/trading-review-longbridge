@@ -100,7 +100,7 @@ function planDetail(d: PlanDetail | null | undefined): string {
   const readiness = !d.zones.some(z => z.kind === action) ? '仅观察：确认条件未齐，暂无可执行区间。' : d.plan_status !== 'confirmed' ? '区间仅为草案；该版本经你确认后才生效。' : '仅在该版本的全部条件满足时有效，不是无条件买卖指令。';
   return `<div class="v2-plan-detail"><div class="v2-plan-detail-header"><strong>${setup[d.setup_type]}</strong><span class="v2-status-badge v2-status-${{ draft: 'partial', confirmed: 'complete', expired: 'stale' }[d.plan_status]}">${{ draft: '待确认草案', confirmed: '已确认计划', expired: '已到期' }[d.plan_status]}</span><small>${quotes[d.quote_relation]}</small></div><small class="v2-plan-evidence">技术参考：${escape(d.evidence.as_of)} 收盘 · EMA20/50/200 · ATR14 ${escape(d.evidence.atr14)}</small><div class="v2-plan-zones">${zoneRows}</div><small class="v2-plan-evidence">${readiness}</small></div>`;
 }
-function executionContext(c: ExecutionContext | null | undefined): string {
+function executionContext(c: ExecutionContext | null | undefined, observationOnly = false): string {
   if (!c) return '<div class="v2-execution-context"><small>交易工具与观察周期：待确认</small></div>';
   const tool = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'LEAP Call' }[c.tool_kind];
   const timeframe = { '1H': '1小时线', '4H': '4小时线', '1D': '日线', '1W': '周线' } as const;
@@ -109,17 +109,24 @@ function executionContext(c: ExecutionContext | null | undefined): string {
     : c.trade_symbol.replace(/\.US$/i, '');
   const observation = c.observation_symbol ? c.observation_symbol.replace(/\.US$/i, '') : '待确认';
   const basis = { bar_close: '收线确认', intrabar_touch: '盘中触及', unconfirmed: '待确认' }[c.trigger_basis];
-  const exception = c.trigger_timeframe !== c.observation_timeframe ? ` · 触发周期：${c.trigger_timeframe ? timeframe[c.trigger_timeframe] : '待确认'}（预先约定的例外）` : '';
-  return `<div class="v2-execution-context"><small>交易工具：${escape(tool)} · 实际交易对象：${escape(traded)} · 观察对象：${escape(observation)} · 观察周期：${escape(c.observation_timeframe ? timeframe[c.observation_timeframe] : '待确认')} · 触发方式：${escape(basis)}${escape(exception)}</small></div>`;
+  const trigger = c.trigger_timeframe ? timeframe[c.trigger_timeframe] : '待确认';
+  const exception = c.trigger_timeframe !== c.observation_timeframe ? '（预先约定的例外）' : '';
+  const prefix = observationOnly ? '观察口径（非交易计划） · ' : '';
+  return `<div class="v2-execution-context"><small>${prefix}交易工具：${escape(tool)} · 实际交易对象：${escape(traded)} · 观察对象：${escape(observation)} · 观察周期：${escape(c.observation_timeframe ? timeframe[c.observation_timeframe] : '待确认')} · 触发周期：${escape(trigger)}${exception} · 触发方式：${escape(basis)}</small></div>`;
 }
 function planRow(r: Position, verified: boolean): string {
+  const context = r.plan_detail?.execution_context ?? r.execution_context;
+  const observationOnly = !r.plan_detail && r.execution_context !== undefined;
   const t = r.trigger_distance;
   const tone = !verified && ['red', 'green'].includes(t.tone) ? 'amber' : t.tone;
   const list = (v: string[], empty: string) => v.length ? v.map(x => `<span>${ui(x, empty)}</span>`).join('') : `<span class="v2-unavailable">${escape(empty)}</span>`;
-  const classes = ['v2-plan-row', `v2-tab-${r.tab}`, r.near_trigger ? 'v2-near-trigger' : '', r.has_gap ? 'v2-has-gap' : ''].filter(Boolean).join(' ');
+  const classes = ['v2-plan-row', `v2-tab-${r.tab}`, r.near_trigger && !observationOnly ? 'v2-near-trigger' : '', r.has_gap ? 'v2-has-gap' : ''].filter(Boolean).join(' ');
   const symbolNote = ui(r.symbol) === ui(r.display_name) ? '' : `<small>${ui(r.symbol)}</small>`;
   const detailLabel = !r.plan_detail ? '查看观察条件与下一步' : r.tab === 'holdings' ? '查看持仓计划' : '查看买入计划';
-  return `<div class="${classes}" data-tab="${r.tab}"><div class="v2-plan-symbol"><strong>${ui(r.display_name)}</strong>${symbolNote}</div><div class="v2-plan-role"><strong>${ui(r.role, r.tab === 'holdings' ? '持仓' : '买入候选')}</strong><small>${ui(r.holding_state, r.tab === 'holdings' ? '本次读取时持仓' : '尚未持有')}</small></div><div class="v2-plan-coverage">${ui(r.plan_coverage, '计划待确认')}</div><div class="v2-trigger v2-tone-${tone}"><small>${ui(t.label, '触发条件')}</small><strong>${ui(t.value, '待确认')}</strong></div>${valuation(r)}${executionContext(r.execution_context)}<details class="v2-plan-checks"><summary>${detailLabel}</summary><div class="v2-plan-check-grid"><div class="v2-plan-list"><strong>验证信号</strong>${list(r.signals, '信号待确认')}</div><div class="v2-plan-list"><strong>失效条件</strong>${list(r.invalidation, '失效条件待确认')}</div><div class="v2-plan-list"><strong>下一步检查</strong>${list(r.next_checks, '先确认计划')}</div></div>${r.has_gap && r.gap ? `<small class="v2-gap-label">${ui(r.gap, '计划条件待确认')}</small>` : ''}${planDetail(r.plan_detail)}</details></div>`;
+  const coverage = observationOnly ? '<div class="v2-plan-coverage">非交易计划</div>' : `<div class="v2-plan-coverage">${ui(r.plan_coverage, '计划待确认')}</div>`;
+  const trigger = observationOnly ? '<div class="v2-trigger v2-tone-neutral"><small>观察口径</small><strong>不生成自动触发</strong></div>' : `<div class="v2-trigger v2-tone-${tone}"><small>${ui(t.label, '触发条件')}</small><strong>${ui(t.value, '待确认')}</strong></div>`;
+  const checks = observationOnly ? '' : `<details class="v2-plan-checks"><summary>${detailLabel}</summary><div class="v2-plan-check-grid"><div class="v2-plan-list"><strong>验证信号</strong>${list(r.signals, '信号待确认')}</div><div class="v2-plan-list"><strong>失效条件</strong>${list(r.invalidation, '失效条件待确认')}</div><div class="v2-plan-list"><strong>下一步检查</strong>${list(r.next_checks, '先确认计划')}</div></div>${r.has_gap && r.gap ? `<small class="v2-gap-label">${ui(r.gap, '计划条件待确认')}</small>` : ''}${planDetail(r.plan_detail)}</details>`;
+  return `<div class="${classes}" data-tab="${r.tab}"><div class="v2-plan-symbol"><strong>${ui(r.display_name)}</strong>${symbolNote}</div><div class="v2-plan-role"><strong>${ui(r.role, r.tab === 'holdings' ? '持仓' : '买入候选')}</strong><small>${ui(r.holding_state, r.tab === 'holdings' ? '本次读取时持仓' : '尚未持有')}</small></div>${coverage}${trigger}${valuation(r)}${executionContext(context, observationOnly)}${checks}</div>`;
 }
 function valuation(r: Position): string {
   const v = r.valuation;

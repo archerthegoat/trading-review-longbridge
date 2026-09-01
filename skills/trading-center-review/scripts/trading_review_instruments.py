@@ -149,5 +149,5 @@ def context_text(context: Dict[str, Any]) -> str:
     period = PERIOD_LABELS.get(context["observation_timeframe"], "待确认")
     basis = {"bar_close": "收线确认", "intrabar_touch": "盘中触及", "unconfirmed": "待确认"}[context["trigger_basis"]]
     trigger = PERIOD_LABELS.get(context["trigger_timeframe"], "待确认")
-    extra = f"；触发周期：{trigger}（预先约定的例外）" if context["trigger_timeframe"] != context["observation_timeframe"] else ""
-    return f"交易工具：{LABELS[context['tool_kind']]} · 实际交易对象：{traded} · 观察对象：{asset} · 观察周期：{period} · 触发方式：{basis}{extra}"
+    exception = "（预先约定的例外）" if context["trigger_timeframe"] != context["observation_timeframe"] else ""
+    return f"交易工具：{LABELS[context['tool_kind']]} · 实际交易对象：{traded} · 观察对象：{asset} · 观察周期：{period} · 触发周期：{trigger}{exception} · 触发方式：{basis}"

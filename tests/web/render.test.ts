@@ -123,3 +123,36 @@ test('actual leveraged-ETF symbol, underlying and observation asset stay auditab
   wrongCompany.daily.positions_plans.items[0].instrument.underlying = 'TSLA.US';
   assert.throws(() => validate(wrongCompany));
 });
+test('observation-only context stays neutral and plan context wins', () => {
+  const v: any = snapshot();
+  const row = v.daily.positions_plans.items[0];
+  v.daily.positions_plans.items = [row];
+  row.instrument = { tool_kind: 'stock', underlying: row.symbol };
+  row.execution_context = {
+    tool_kind: 'stock', trade_symbol: row.symbol, observation_symbol: row.symbol,
+    observation_timeframe: '4H', trigger_timeframe: '4H', trigger_basis: 'bar_close', exception_note: null,
+  };
+  row.plan_coverage = '不应出现的计划覆盖';
+  row.trigger_distance = { label: '不应出现的触发距离', value: '不应出现的距离值', tone: 'red' };
+  row.signals = ['不应出现的验证信号']; row.invalidation = ['不应出现的失效条件']; row.next_checks = ['不应出现的计划检查'];
+  const admitted = validate(v), html = render(admitted), body = html.split('<body>', 2)[1]!;
+  assert.match(body, /观察口径（非交易计划）/);
+  assert.match(body, /观察周期：4小时线 · 触发周期：4小时线 · 触发方式：收线确认/);
+  assert.match(body, /不生成自动触发/);
+  for (const marker of ['不应出现的计划覆盖', '不应出现的触发距离', '不应出现的距离值', '不应出现的验证信号', '不应出现的失效条件', '不应出现的计划检查']) assert.doesNotMatch(body, new RegExp(marker));
+  assert.doesNotMatch(body, /class="v2-plan-checks"|v2-near-trigger/);
+  assert.equal(normalized(html), normalized(pythonRender(admitted)));
+
+  const planned: any = snapshot(), plannedRow = planned.daily.positions_plans.items[0];
+  const context = {
+    tool_kind: 'stock', trade_symbol: plannedRow.symbol, observation_symbol: plannedRow.symbol,
+    observation_timeframe: '1D', trigger_timeframe: '1D', trigger_basis: 'bar_close', exception_note: null,
+  };
+  plannedRow.plan_detail = JSON.parse(python("import sys,json; sys.path.insert(0,'tests'); from test_render_trade_review_dashboard_v2 import plan_detail; print(json.dumps(plan_detail()))"));
+  Object.assign(plannedRow.plan_detail, { underlying: plannedRow.symbol, execution_context: context });
+  Object.assign(plannedRow.plan_detail.evidence, { symbol: plannedRow.symbol, period: '1D' });
+  delete plannedRow.execution_context;
+  const plannedHtml = render(validate(planned));
+  assert.match(plannedHtml, /观察周期：日线 · 触发周期：日线/);
+  assert.equal(normalized(plannedHtml), normalized(pythonRender(validate(planned))));
+});
