@@ -102,10 +102,10 @@ function planDetail(d: PlanDetail | null | undefined): string {
 }
 function executionContext(c: ExecutionContext | null | undefined, observationOnly = false): string {
   if (!c) return '<div class="v2-execution-context"><small>交易工具与观察周期：待确认</small></div>';
-  const tool = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'LEAP Call' }[c.tool_kind];
+  const tool = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'Long Call' }[c.tool_kind];
   const timeframe = { '1H': '1小时线', '4H': '4小时线', '1D': '日线', '1W': '周线' } as const;
   const traded = c.tool_kind === 'leap_call' && c.trade_symbol.endsWith(':OPTION')
-    ? `${c.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} LEAP（脱敏）`
+    ? `${c.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} Long Call（脱敏）`
     : c.trade_symbol.replace(/\.US$/i, '');
   const observation = c.observation_symbol ? c.observation_symbol.replace(/\.US$/i, '') : '待确认';
   const basis = { bar_close: '收线确认', intrabar_touch: '盘中触及', unconfirmed: '待确认' }[c.trigger_basis];
@@ -159,9 +159,9 @@ function weeklyReview(w: Weekly | null): string {
   const episodes = w.review_episodes.filter(r => isUS(r.underlying)).map(r => {
     const compliance = { compliant: '按计划执行', non_compliant: '未按计划执行', unassessable: '执行不可评估' }[r.compliance_status];
     const outcome = { success: '计划成功', failure: '计划失败', open: '尚未结束', flat: '结果持平', unverifiable: '结果不可核验' }[r.outcome_status];
-    const tool = r.tool_kind ? { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'LEAP Call', unknown: '工具待确认' }[r.tool_kind] : '历史记录：工具未区分';
+    const tool = r.tool_kind ? { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'Long Call', unknown: '工具待确认' }[r.tool_kind] : '历史记录：工具未区分';
     const frame = r.observation_timeframe ? { '1H': '1小时线', '4H': '4小时线', '1D': '日线', '1W': '周线' }[r.observation_timeframe] : '周期待确认';
-    const actual = r.trade_symbol ? `实际交易对象：${r.tool_kind === 'leap_call' && r.trade_symbol.endsWith(':OPTION') ? `${r.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} LEAP（脱敏）` : r.trade_symbol.replace(/\.US$/i, '')} · ` : '';
+    const actual = r.trade_symbol ? `实际交易对象：${r.tool_kind === 'leap_call' && r.trade_symbol.endsWith(':OPTION') ? `${r.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} Long Call（脱敏）` : r.trade_symbol.replace(/\.US$/i, '')} · ` : '';
     return `<article class="v2-episode-review"><div><strong>${escape(r.market_date)} · ${ui(r.underlying)} · ${r.side === 'buy' ? '买入' : r.side === 'sell' ? '卖出' : '交易'}</strong>${badge(r.data_status)}</div><p>${escape(actual)}${escape(tool)} · ${escape(frame)} · ${compliance} · ${outcome}</p><small>${r.plan_id === null ? '无事前已确认计划' : '依据事前已确认计划复核'}</small><p><strong>原因：</strong>${ui(r.reason, '原因待复核')}</p><p><strong>下一条规则：</strong>${ui(r.next_rule, '先核对事前计划')}</p></article>`;
   });
   return (episodes.length ? `<details class="v2-weekly-inline v2-episode-details"><summary><strong>需具体复盘 · ${episodes.length} 笔</strong><span>只看执行与规则</span></summary><div class="v2-weekly-stack">${episodes.join('')}</div></details>` : '') + weeklyInline(w, 'positions_plan', '周度持仓计划回看') + weeklyInline(w, 'plan_review', '计划复核与纪律') + weeklyInline(w, 'next_week', '后续计划待确认');

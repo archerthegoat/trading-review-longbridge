@@ -2359,7 +2359,7 @@ def _render_weekly_plan_review(packet: Optional[Dict[str, Any]]) -> str:
         if not _is_us(row["underlying"]):
             continue
         plan_ref = "无事前已确认计划" if row["plan_id"] is None else "依据事前已确认计划复核"
-        tool = {"stock": "正股", "single_stock_leveraged_etf": "单股杠杆 ETF", "leap_call": "LEAP Call", "unknown": "工具待确认"}.get(row.get("tool_kind"), "历史记录：工具未区分")
+        tool = {"stock": "正股", "single_stock_leveraged_etf": "单股杠杆 ETF", "leap_call": "Long Call", "unknown": "工具待确认"}.get(row.get("tool_kind"), "历史记录：工具未区分")
         timeframe = instruments.PERIOD_LABELS.get(row.get("observation_timeframe"), "周期待确认")
         actual = ""
         if row.get("trade_symbol") and row.get("tool_kind"):

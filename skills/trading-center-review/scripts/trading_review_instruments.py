@@ -18,7 +18,7 @@ CONTEXT_FIELDS = (
     "trigger_timeframe", "trigger_basis", "exception_note",
 )
 FACT_FIELDS = ("tool_kind", "underlying")
-LABELS = {"stock": "正股", "single_stock_leveraged_etf": "单股杠杆 ETF", "leap_call": "LEAP Call", "unknown": "工具待确认"}
+LABELS = {"stock": "正股", "single_stock_leveraged_etf": "单股杠杆 ETF", "leap_call": "Long Call", "unknown": "工具待确认"}
 PERIOD_LABELS = {"1H": "1小时线", "4H": "4小时线", "1D": "日线", "1W": "周线"}
 COMPACT_OPTION_IDENTITY_RE = re.compile(r"\d{6,8}[CPcp]\d+")
 TEXT_OPTION_IDENTITY_RE = re.compile(
@@ -138,7 +138,7 @@ def matches(context: Dict[str, Any], trade_symbol: str, instrument: Any, *, unde
 
 def display_trade_symbol(trade_symbol: str, tool_kind: str) -> str:
     if tool_kind == "leap_call" and trade_symbol.endswith(":OPTION"):
-        return f"{trade_symbol.removesuffix(':OPTION').removesuffix('.US')} LEAP（脱敏）"
+        return f"{trade_symbol.removesuffix(':OPTION').removesuffix('.US')} Long Call（脱敏）"
     return trade_symbol.removesuffix(".US")
 
 
