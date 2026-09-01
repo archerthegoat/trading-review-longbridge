@@ -9,6 +9,51 @@ interface Index { schema_version: 'trading-review-publications.v1'; current: str
 const initial = (): Index => ({ schema_version: 'trading-review-publications.v1', current: '', previous: null, routes: {} });
 export const sourceTimes = (s: DisplaySnapshot) => ({ review_date: s.daily.meta.review_date, content_generated_at: s.daily.meta.generated_at, market_as_of: s.daily.meta.market_as_of, weekly_generated_at: s.weekly?.meta.generated_at ?? null });
 export interface Manifest { schema_version: 'trading-review-publication.v1'; publication_id: string; view_sha256: string; html_sha256: string; source_times: ReturnType<typeof sourceTimes> }
+type CalendarEvent = DisplaySnapshot['daily']['events']['groups'][number]['events'][number];
+type CalendarCoverage = NonNullable<DisplaySnapshot['daily']['events']['coverage']>[number];
+type CalendarScope = 'macro' | 'fed_speech' | 'earnings';
+const REQUIRED_CALENDAR_SCOPES: CalendarScope[] = ['macro', 'fed_speech', 'earnings'];
+const NY_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+function newYorkDate(value: string): string {
+  const parts = Object.fromEntries(NY_DATE.formatToParts(new Date(value)).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+function dayAdd(value: string, days: number): string {
+  const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10);
+}
+function calendarWindow(reference: string): { start: string; end: string } {
+  const date = newYorkDate(reference), weekday = (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
+  const start = dayAdd(date, -weekday); return { start, end: dayAdd(start, 14) };
+}
+function coverageScope(row: CalendarCoverage): CalendarScope | null {
+  if (/联储.*讲话|美联储|地区联储/.test(row.label)) return 'fed_speech';
+  if (/宏观/.test(row.label)) return 'macro';
+  if (/财报/.test(row.label)) return 'earnings';
+  return null;
+}
+function eventKey(row: CalendarEvent): string {
+  return `${row.et_date}|${row.et_time.slice(0, 5)}|${row.title.trim().toLowerCase()}`;
+}
+function calendarRows(view: DisplaySnapshot): CalendarEvent[] {
+  return view.daily.events.groups.flatMap(group => group.events);
+}
+function assertCombinedCalendar(view: DisplaySnapshot): void {
+  const events = view.daily.events;
+  if (!events.reference_at) return;
+  const scopes = new Set((events.coverage ?? []).map(coverageScope).filter((scope): scope is CalendarScope => scope !== null));
+  if (REQUIRED_CALENDAR_SCOPES.some(scope => !scopes.has(scope))) throw new Error('event_calendar_coverage_incomplete');
+}
+function assertCalendarProgress(old: DisplaySnapshot, next: DisplaySnapshot): void {
+  const previous = old.daily.events, current = next.daily.events;
+  if (!previous.reference_at) return;
+  if (!current.reference_at) throw new Error('event_calendar_reference_regression');
+  if (Date.parse(current.reference_at) < Date.parse(previous.reference_at)) throw new Error('event_calendar_reference_regression');
+  const window = calendarWindow(current.reference_at);
+  const currentKeys = new Set(calendarRows(next).map(eventKey));
+  const missing = calendarRows(old).filter(row => row.et_date >= window.start && row.et_date < window.end && !currentKeys.has(eventKey(row)));
+  if (missing.length) throw new Error('event_calendar_item_regression');
+}
 function indexValue(value: unknown): Index {
   const o = object(value, ['schema_version', 'current', 'previous', 'routes']);
   if (o.schema_version !== 'trading-review-publications.v1' || typeof o.current !== 'string' || !HASH.test(o.current) || (o.previous !== null && (typeof o.previous !== 'string' || !HASH.test(o.previous))) || !o.routes || typeof o.routes !== 'object' || Array.isArray(o.routes)) throw new Error('invalid_publication_index');
@@ -31,6 +76,7 @@ export class PublicationStore extends PrivateTree {
   }
   publish(input: unknown, options: { route?: string; expectedCurrent?: string | null } = {}): Manifest {
     const view = validate(input);
+    assertCombinedCalendar(view);
     if (options.route !== undefined && !ROUTE.test(options.route)) throw new Error('invalid_history_route');
     const encoded = jsonBytes(view), html = Buffer.from(render(view));
     const id = hash(Buffer.concat([encoded, Buffer.from([0]), html]));
@@ -45,6 +91,7 @@ export class PublicationStore extends PrivateTree {
         const old = this.load(current).view;
         if (view.daily.meta.review_date < old.daily.meta.review_date || Date.parse(view.daily.meta.generated_at) < Date.parse(old.daily.meta.generated_at)) throw new Error('daily_record_regression');
         if (old.weekly && (!view.weekly || view.weekly.meta.period_end < old.weekly.meta.period_end || Date.parse(view.weekly.meta.generated_at) < Date.parse(old.weekly.meta.generated_at))) throw new Error('weekly_record_regression');
+        assertCalendarProgress(old, view);
       }
       for (const [name, content] of [['view.json', encoded], ['index.html', html], ['manifest.json', jsonBytes(manifest)]] as const) this.writeOnce(`publications/${id}/${name}`, content);
       this.load(id);

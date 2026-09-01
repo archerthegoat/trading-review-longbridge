@@ -40,6 +40,32 @@ test('validation, stale preparation, history mutation and source regression cann
   const unknown = { ...v, account: 'not admitted' }; assert.throws(() => f.store.publish(unknown));
   assert.ok(f.store.read('publications.json').equals(before));
 });
+test('combined two-week calendar cannot silently lose coverage, reference time or events', t => {
+  const f = isolated(); t.after(f.cleanup); const v = snapshot();
+  v.daily.events.reference_at = '2026-08-31T17:18:04+08:00';
+  v.daily.events.coverage = [
+    { label: '宏观日历', status: 'complete', note: '本周与下周已核对。' },
+    { label: '联储讲话', status: 'complete', note: '官方排期已核对。' },
+    { label: '持仓相关财报', status: 'complete', note: '相关排期已核对。' },
+  ];
+  f.store.publish(v);
+  const next = () => {
+    const value = structuredClone(v);
+    value.daily.meta.generated_at = '2026-08-31T18:00:00+08:00';
+    value.daily.events.reference_at = '2026-08-31T18:00:00+08:00';
+    return value;
+  };
+  const noSpeechCoverage = next(); noSpeechCoverage.daily.events.coverage = noSpeechCoverage.daily.events.coverage!.filter(row => row.label !== '联储讲话');
+  assert.throws(() => f.store.publish(noSpeechCoverage), /event_calendar_coverage_incomplete/);
+  const noReference = next(); delete noReference.daily.events.reference_at;
+  assert.throws(() => f.store.publish(noReference), /event_calendar_reference_regression/);
+  const oldReference = next(); oldReference.daily.events.reference_at = '2026-08-31T16:00:00+08:00';
+  assert.throws(() => f.store.publish(oldReference), /event_calendar_reference_regression/);
+  const missingEvent = next(); missingEvent.daily.events.groups[1]!.events.shift();
+  assert.throws(() => f.store.publish(missingEvent), /event_calendar_item_regression/);
+  const cancelled = next(); cancelled.daily.events.groups[1]!.events[0]!.status = '已取消';
+  assert.doesNotThrow(() => f.store.publish(cancelled));
+});
 test('failure before index commit leaves a valid old page; retry resumes the same immutable bundle', t => {
   const f = isolated(); t.after(f.cleanup); const v = snapshot(); const one = f.store.publish(v);
   v.daily.meta.generated_at = '2026-08-31T09:00:00+08:00';
