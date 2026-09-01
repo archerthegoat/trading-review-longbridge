@@ -289,7 +289,7 @@ class DashboardV2RendererTests(unittest.TestCase):
         self.assertIn("暂无数据", empty)
         self.assertIn("暂无已收录事件", empty)
         self.assertIn("数据陈旧", stale)
-        self.assertIn("陈旧快照", stale)
+        self.assertIn("演示陈旧数据复盘", stale)
 
     def test_non_complete_market_direction_is_neutral(self):
         partial = self.render(fixture("partial"))
@@ -656,8 +656,8 @@ class DashboardV2RendererTests(unittest.TestCase):
         self.assertIn("报价陈旧，区间保持不变", after)
 
     def test_untrusted_text_is_escaped(self):
-        packet = fixture("complete")
-        packet["codex_analysis"]["headline"] = '<b data-x="1">演示</b>'
+        packet = completed_close_packet()
+        packet["market"]["environment"]["headline"] = '<b data-x="1">演示</b>'
         rendered = self.render(packet)
         self.assertNotIn('<b data-x="1">演示</b>', rendered)
         self.assertIn("&lt;b data-x=&quot;1&quot;&gt;演示&lt;/b&gt;", rendered)
@@ -1028,12 +1028,12 @@ class DashboardV2RendererTests(unittest.TestCase):
 
     def test_unified_daily_order_is_unchanged_with_weekly_increments(self):
         rendered = MODULE.render_unified_dashboard(
-            daily_packet=fixture("complete"),
+            daily_packet=completed_close_packet(),
             weekly_packet=weekly_packet(),
             template=TEMPLATE_PATH.read_text(encoding="utf-8"),
         )
         headings = (
-            'id="market-heading"', 'id="judgement-heading"',
+            'id="market-heading"', 'id="environment-heading"',
             'id="operations-heading"', 'id="plans-heading"', 'id="events-heading"',
         )
         offsets = [rendered.index(heading) for heading in headings]

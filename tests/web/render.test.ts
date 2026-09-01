@@ -81,8 +81,9 @@ test('event conflicts are not optimistic; DST gaps and folds fail closed', () =>
   assert.throws(() => nyInstant('2026-03-08', '02:30'));
   assert.throws(() => nyInstant('2026-11-01', '01:30'));
 });
-test('internal diagnostics stay out but economic revisions remain visible', () => {
-  const v = snapshot(); v.daily.codex_analysis.facts = [{ label: '就业修订', text: '就业数据向下修订，需重新评估增长。' }];
+test('market environment evidence stays visible while internal diagnostics stay out', () => {
+  const v = withCloseEnvironment(snapshot());
+  v.daily.market.environment.evidence = ['就业数据向下修订，需重新评估增长。'];
   v.daily.codex_analysis.gaps = [{ label: '内部', text: 'partition revision source_scope' }];
   const html = render(validate(v));
   assert.match(html, /就业数据向下修订/); assert.doesNotMatch(html, /partition revision/);
