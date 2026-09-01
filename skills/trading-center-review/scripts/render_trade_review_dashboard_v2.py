@@ -126,6 +126,20 @@ INTERNAL_UI_VALUE_RE = re.compile(
     r"trading[-_ ]?review[-_ ]?dashboard\.v2|反证审查)",
     re.IGNORECASE,
 )
+MARKET_ENVIRONMENT_FORBIDDEN_RE = re.compile(
+    r"(?:账户|持仓|订单|资金|买入|卖出|做多|做空|加仓|减仓|开仓|平仓|下单|"
+    r"建议买入|建议卖出|买入机会|卖出机会|买入信号|卖出信号|做多机会|做空机会|"
+    r"长期偏多|长期偏空|长期看多|长期看空|引用|参考资料|来源[:：]|"
+    r"\b(?:account|accounts|position|positions|order|orders|fund|funds|cash|buy|sell)\b|"
+    r"\b(?:go\s+long|go\s+short|long\s+(?:position|bias|call|put|signal|trade)|"
+    r"short\s+(?:position|bias|call|put|signal|trade)|"
+    r"buying\s+(?:opportunity|signal|recommendation|now)|"
+    r"selling\s+(?:opportunity|signal|recommendation|now)|purchase\s+now)\b|"
+    r"\bLongbridge\s*AI\b|\bSkill\b|"
+    r"https?://|www\.|\[[^\]]+\]\([^)]*\)|"
+    r"\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|co|cn|dev|app|xyz|info|biz|me)\b)",
+    re.IGNORECASE,
+)
 SENSITIVE_CJK_KEYS = (
     "账户标识",
     "账户编号",
@@ -234,6 +248,17 @@ def _text(value: Any, path: str, required: bool = True) -> str:
     if instruments.contains_contract_identity(value):
         raise DashboardRenderError(f"{path} contains option contract identity")
     return value
+
+
+def validate_market_environment_text(value: Any, path: str) -> str:
+    """Validate text that can be promoted into the public environment card."""
+
+    text = _text(value, path).strip()
+    if len(text) > 600:
+        raise DashboardRenderError(f"{path} is too long")
+    if MARKET_ENVIRONMENT_FORBIDDEN_RE.search(text):
+        raise DashboardRenderError(f"{path} contains a forbidden private, action, or internal term")
+    return text
 
 
 def _optional_text(value: Any, path: str) -> Optional[str]:
@@ -557,25 +582,21 @@ def _validate_market_environment(value: Any, path: str) -> Dict[str, Any]:
     keys = {
         "status",
         "headline",
-        "pricing_signals",
-        "cross_asset_confirmation",
+        "evidence",
         "next_session_watch",
     }
     _reject_unknown(item, keys, path)
     _required_keys(item, keys, path)
     _enum(item["status"], {"complete", "partial"}, f"{path}.status")
-    for key in ("headline", "cross_asset_confirmation", "next_session_watch"):
-        _text(item[key], f"{path}.{key}")
-    signals = _array(item["pricing_signals"], f"{path}.pricing_signals")
-    if not 1 <= len(signals) <= 3:
-        raise DashboardRenderError(f"{path}.pricing_signals must contain one to three items")
-    for index, raw in enumerate(signals):
-        signal_path = f"{path}.pricing_signals[{index}]"
-        signal = _object(raw, signal_path)
-        _reject_unknown(signal, {"label", "text"}, signal_path)
-        _required_keys(signal, {"label", "text"}, signal_path)
-        _text(signal["label"], f"{signal_path}.label")
-        _text(signal["text"], f"{signal_path}.text")
+    for key in ("headline", "next_session_watch"):
+        validate_market_environment_text(item[key], f"{path}.{key}")
+    evidence = _array(item["evidence"], f"{path}.evidence")
+    if len(evidence) > 3:
+        raise DashboardRenderError(f"{path}.evidence must contain at most three items")
+    if item["status"] == "complete" and not evidence:
+        raise DashboardRenderError(f"{path}.evidence is required for complete analysis")
+    for index, raw in enumerate(evidence):
+        validate_market_environment_text(raw, f"{path}.evidence[{index}]")
     return item
 
 
@@ -1881,10 +1902,13 @@ def _render_market_environment(packet: Dict[str, Any]) -> str:
     environment = market.get("environment")
     if environment is None:
         return ""
-    signals = "".join(
-        f'<article class="v2-environment-signal"><strong>{_ui(row["label"])}</strong>'
-        f'<p>{_ui(row["text"])}</p></article>'
-        for row in environment["pricing_signals"]
+    evidence = "".join(
+        f"<li>{_ui(item)}</li>" for item in environment["evidence"]
+    )
+    evidence_block = (
+        f'<ul class="v2-environment-evidence">{evidence}</ul>'
+        if evidence
+        else '<p class="v2-environment-empty">该收盘日暂无可展示的分析证据。</p>'
     )
     return f"""
       <section class="v2-judgement" aria-labelledby="environment-heading">
@@ -1892,16 +1916,15 @@ def _render_market_environment(packet: Dict[str, Any]) -> str:
           <h1 id="environment-heading">市场环境判断 <span>基于 {_escape(market['market_date'])} 收盘</span></h1>
         </div>
         <p class="v2-headline">{_ui(environment['headline'])}</p>
-        <div class="v2-environment-signals">{signals}</div>
         <div class="v2-environment-summary">
-          <strong>跨资产确认</strong>
-          <p>{_ui(environment['cross_asset_confirmation'])}</p>
+          <strong>支持事实</strong>
+          {evidence_block}
         </div>
         <div class="v2-environment-summary v2-environment-watch">
-          <strong>下一交易日观察</strong>
+          <strong>下一交易日验证</strong>
           <p>{_ui(environment['next_session_watch'])}</p>
         </div>
-        <p class="v2-environment-boundary">只记录上一交易日收盘定价，不随盘前或盘中行情刷新。</p>
+        <p class="v2-environment-boundary">只基于该收盘日的公开市场收盘分析，不随盘前或盘中行情刷新。</p>
       </section>
     """
 

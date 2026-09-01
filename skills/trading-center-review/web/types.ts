@@ -43,8 +43,8 @@ export interface Daily {
     previous_trading_window: { label: string; market_date: string; ny_start: string; ny_end: string; utc_start: string; utc_end: string };
     period_label: string; overall_status: Status };
   market: Module & { source_scope?: string; basis?: 'completed_close'; market_date?: string;
-    environment?: { status: 'complete' | 'partial'; headline: string; pricing_signals: LabeledText[];
-      cross_asset_confirmation: string; next_session_watch: string };
+    environment?: { status: 'complete' | 'partial'; headline: string; evidence: string[];
+      next_session_watch: string };
     items: {
     name: string; symbol: string; is_proxy: boolean; proxy_for: string | null;
     value: number | null; change_pct: number | null; direction: Direction; strength: number;

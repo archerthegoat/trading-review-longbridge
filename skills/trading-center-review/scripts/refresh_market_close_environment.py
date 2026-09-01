@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Refresh the fixed market radar from completed Longbridge daily closes.
+"""Refresh the fixed market radar and one LongbridgeAI close judgement.
 
-The command reads only six public market proxies. It never calls account,
-position, order, execution, statement, or trading capabilities. The admitted
-display input and sanitized output stay in the owner-only private runtime.
+The command reads six public market proxies, then invokes the approved
+LongbridgeAI public analysis capability once when all six closes are complete.
+It never calls account, position, order, execution, statement, or trading
+capabilities. The admitted display input and sanitized output stay in the
+owner-only private runtime.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ NY_TZ = ZoneInfo("America/New_York")
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 LOOKBACK_DAYS = 14
 LIMIT = 8 * 1024 * 1024
+AGENT_TIMEOUT_SECONDS = 180
+AGENT_UID = "chatbot"
 
 
 class MarketCloseRefreshError(RuntimeError):
@@ -124,7 +128,9 @@ def completed_close_fact(
     }
 
 
-def _run_longbridge(command: list[str], cwd: Path) -> Any:
+def _run_longbridge(
+    command: list[str], cwd: Path, *, timeout: int = 30
+) -> Any:
     try:
         result = subprocess.run(
             command,
@@ -132,13 +138,105 @@ def _run_longbridge(command: list[str], cwd: Path) -> Any:
             capture_output=True,
             text=True,
             check=False,
-            timeout=30,
+            timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise MarketCloseRefreshError("Longbridge completed-close read failed") from exc
     if result.returncode != 0:
         raise MarketCloseRefreshError("Longbridge completed-close read failed")
     return _parse_json(result.stdout)
+
+
+def _analysis_prompt(review_date: str) -> str:
+    return (
+        f"请仅基于美国市场最近一个已完成交易日（{review_date}）的收盘数据，"
+        "使用 LongbridgeAI 的公开市场分析能力，给出一个非常简短的整体市场环境判断，"
+        "用于私人交易看板。不要读取或讨论账户、持仓、订单或资金，也不要生成买卖指令。"
+        "只返回一个 JSON 对象，不要 Markdown、不要解释、不要代码围栏。"
+        "格式必须严格为："
+        f'{{"market_date":"{review_date}","conclusion":"一句整体市场环境判断",'
+        '"evidence":["支持事实1","支持事实2","支持事实3"],'
+        '"next_session_watch":"下一交易日需要验证的一个条件"}。'
+        "evidence 最多三条；如果收盘数据不足，conclusion 必须明确写数据不足。"
+    )
+
+
+def _run_longbridge_agent(
+    review_date: str,
+    *,
+    longbridge_bin: str,
+    cwd: Path,
+) -> Any:
+    return _run_longbridge(
+        [
+            longbridge_bin,
+            "agent",
+            "chat",
+            AGENT_UID,
+            _analysis_prompt(review_date),
+            "--format",
+            "json",
+            "--lang",
+            "zh-CN",
+        ],
+        cwd,
+        timeout=AGENT_TIMEOUT_SECONDS,
+    )
+
+
+def _agent_text(value: Any, path: str) -> str:
+    try:
+        return dashboard.validate_market_environment_text(value, path)
+    except dashboard.DashboardRenderError as exc:
+        raise MarketCloseRefreshError(f"{path} is not admissible") from exc
+
+
+def parse_agent_environment(response: Any, review_date: str) -> Dict[str, Any]:
+    """Project one LongbridgeAI JSON answer into the display environment shape."""
+
+    if not isinstance(response, dict) or response.get("status") != "succeeded":
+        raise MarketCloseRefreshError("LongbridgeAI close analysis failed")
+    answer = response.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise MarketCloseRefreshError("LongbridgeAI close analysis is empty")
+    candidate = answer.strip()
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start < 0 or end <= start:
+        raise MarketCloseRefreshError("LongbridgeAI close analysis is not JSON")
+    payload = _parse_json(candidate[start : end + 1])
+    if not isinstance(payload, dict):
+        raise MarketCloseRefreshError("LongbridgeAI close analysis must be an object")
+    required = {"market_date", "conclusion", "evidence", "next_session_watch"}
+    if set(payload) != required:
+        raise MarketCloseRefreshError("LongbridgeAI close analysis fields are invalid")
+    if payload["market_date"] != review_date:
+        raise MarketCloseRefreshError("LongbridgeAI close analysis date mismatch")
+    evidence = payload["evidence"]
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= 3:
+        raise MarketCloseRefreshError("LongbridgeAI evidence must contain one to three items")
+    return {
+        "status": "complete",
+        "headline": _agent_text(payload["conclusion"], "analysis.conclusion"),
+        "evidence": [
+            _agent_text(value, f"analysis.evidence[{index}]")
+            for index, value in enumerate(evidence)
+        ],
+        "next_session_watch": _agent_text(
+            payload["next_session_watch"], "analysis.next_session_watch"
+        ),
+    }
+
+
+def partial_environment(review_date: str) -> Dict[str, Any]:
+    """Keep the display explicit when the close evidence cannot support analysis."""
+
+    return {
+        "status": "partial",
+        "headline": "上一交易日收盘数据尚未齐备，本次不形成市场环境判断。",
+        "evidence": [],
+        "next_session_watch": "先补齐同一收盘日的六个市场代理，再重新生成收盘判断。",
+    }
 
 
 def collect_close_facts(
@@ -176,106 +274,6 @@ def collect_close_facts(
     return facts
 
 
-def _pct(value: Optional[float]) -> str:
-    if value is None:
-        return "待补齐"
-    sign = "+" if value > 0 else "−" if value < 0 else ""
-    return f"{sign}{abs(value):.2f}%"
-
-
-def _change(facts: Mapping[str, Optional[Mapping[str, Any]]], symbol: str) -> Optional[float]:
-    fact = facts.get(symbol)
-    if fact is None:
-        return None
-    value = float(fact["change_pct"])
-    return value if math.isfinite(value) else None
-
-
-def _signal_text(
-    facts: Mapping[str, Optional[Mapping[str, Any]]],
-    symbols: tuple[str, ...],
-) -> str:
-    return "，".join(f"{symbol.removesuffix('.US')} {_pct(_change(facts, symbol))}" for symbol in symbols)
-
-
-def build_environment(
-    facts: Mapping[str, Optional[Mapping[str, Any]]],
-) -> Dict[str, Any]:
-    available = {symbol for symbol in SYMBOLS if facts.get(symbol) is not None}
-    signals = [
-        {"label": "权益", "text": _signal_text(facts, ("SPY.US", "QQQ.US"))},
-        {"label": "利率与避险代理", "text": _signal_text(facts, ("IEF.US", "GLD.US"))},
-        {"label": "高波动与通胀代理", "text": _signal_text(facts, ("IBIT.US", "USO.US"))},
-    ]
-    spy = _change(facts, "SPY.US")
-    qqq = _change(facts, "QQQ.US")
-    if spy is None or qqq is None:
-        return {
-            "status": "partial",
-            "headline": "上一交易日收盘数据尚未齐备，本次不形成市场环境判断。",
-            "pricing_signals": signals,
-            "cross_asset_confirmation": "两项权益基准未同时齐备，暂不能判断整体风险偏好。",
-            "next_session_watch": "先补齐同一交易日的 SPY 与 QQQ 收盘，再观察其他资产是否确认。",
-        }
-
-    threshold = 0.10
-    if spy > threshold and qqq > threshold:
-        regime = "strong"
-        headline = "权益收盘同步走强，市场风险偏好偏强，但仍需跨资产确认。"
-    elif spy < -threshold and qqq < -threshold:
-        regime = "weak"
-        headline = "权益收盘同步走弱，市场风险偏好偏弱，但仍需跨资产确认。"
-    elif abs(spy) <= threshold and abs(qqq) <= threshold:
-        regime = "neutral"
-        headline = "权益收盘变化有限，市场环境暂偏中性。"
-    else:
-        regime = "mixed"
-        headline = "标普与纳指收盘信号分化，市场环境偏混合。"
-
-    confirmation: list[str] = []
-    ibit = _change(facts, "IBIT.US")
-    ief = _change(facts, "IEF.US")
-    uso = _change(facts, "USO.US")
-    gld = _change(facts, "GLD.US")
-    if regime in {"strong", "weak"} and ibit is not None:
-        same_direction = (regime == "strong" and ibit > threshold) or (
-            regime == "weak" and ibit < -threshold
-        )
-        confirmation.append(
-            "IBIT 与权益同向，高波动风险偏好得到确认。"
-            if same_direction
-            else "IBIT 未与权益同向，高波动风险偏好尚未确认。"
-        )
-    if ief is not None:
-        if ief > threshold:
-            confirmation.append("IEF 收涨，利率代理未形成额外压制。")
-        elif ief < -threshold:
-            confirmation.append("IEF 收跌，利率端仍可能构成约束。")
-    if uso is not None and uso > 1.0:
-        confirmation.append("USO 明显上涨，需继续观察通胀定价压力。")
-    elif uso is not None and uso < -1.0:
-        confirmation.append("USO 明显下跌，增长与需求预期仍需观察。")
-    if gld is not None and abs(gld) > 0.5 and len(confirmation) < 2:
-        confirmation.append("GLD 波动较大，避险与实际利率信号并不单一。")
-    if len(available) < len(SYMBOLS):
-        confirmation.insert(0, "部分跨资产收盘尚未齐备，确认强度有限。")
-    cross_asset = "".join(confirmation[:2]) or "跨资产变化有限，暂未形成额外确认或反例。"
-
-    if regime == "strong":
-        watch = "观察 SPY 与 QQQ 能否继续同向，并看 IBIT 是否保持确认；若 IEF 转弱且 USO 继续上行，当前偏强判断需降级。"
-    elif regime == "weak":
-        watch = "观察 SPY 与 QQQ 是否继续同向走弱；若权益与 IBIT 同步修复，当前偏弱判断失效。"
-    else:
-        watch = "先看 SPY 与 QQQ 是否重新同向；方向统一前，不把单一资产波动升级为整体市场趋势。"
-    return {
-        "status": "complete" if len(available) == len(SYMBOLS) else "partial",
-        "headline": headline,
-        "pricing_signals": signals,
-        "cross_asset_confirmation": cross_asset,
-        "next_session_watch": watch,
-    }
-
-
 def _ny_midnight(review_date: str) -> str:
     value = dt.datetime.combine(
         dt.date.fromisoformat(review_date), dt.time.min, tzinfo=NY_TZ
@@ -298,6 +296,7 @@ def refresh_snapshot(
     snapshot: Any,
     facts: Mapping[str, Optional[Mapping[str, Any]]],
     *,
+    agent_response: Any,
     now: Optional[dt.datetime] = None,
 ) -> Dict[str, Any]:
     admitted = dashboard.validate_display_snapshot(snapshot)
@@ -310,6 +309,16 @@ def refresh_snapshot(
         raise MarketCloseRefreshError("close facts do not match the fixed six-symbol market set")
 
     review_date = view["daily"]["meta"]["review_date"]
+    all_closes_complete = all(
+        facts[symbol] is not None and facts[symbol].get("market_date") == review_date
+        for symbol in SYMBOLS
+    )
+    if all_closes_complete:
+        if agent_response is None:
+            raise MarketCloseRefreshError("LongbridgeAI close analysis is missing")
+        environment = parse_agent_environment(agent_response, review_date)
+    else:
+        environment = partial_environment(review_date)
     complete_times: list[str] = []
     for row in rows:
         symbol = row["symbol"].upper()
@@ -357,7 +366,7 @@ def refresh_snapshot(
         note="仅反映上一交易日收盘定价，不构成单一标的自动触发。" if complete else "部分跨资产收盘尚未齐备。",
         basis="completed_close",
         market_date=review_date,
-        environment=build_environment(facts),
+        environment=environment,
     )
     meta = view["daily"]["meta"]
     meta["market_as_of"] = max(complete_times) if complete_times else _ny_midnight(review_date)
@@ -395,7 +404,22 @@ def main() -> int:
             longbridge_bin=args.longbridge_bin,
             cwd=output_path.parent,
         )
-        refreshed = refresh_snapshot(admitted, facts)
+        agent_response = None
+        if all(
+            facts[symbol] is not None
+            and facts[symbol].get("market_date") == review_date
+            for symbol in SYMBOLS
+        ):
+            agent_response = _run_longbridge_agent(
+                review_date,
+                longbridge_bin=args.longbridge_bin,
+                cwd=output_path.parent,
+            )
+        refreshed = refresh_snapshot(
+            admitted,
+            facts,
+            agent_response=agent_response,
+        )
         write_owner_only_text(
             output_path,
             json.dumps(

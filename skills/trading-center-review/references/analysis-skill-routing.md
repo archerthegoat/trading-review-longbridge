@@ -18,7 +18,7 @@
 每次运行分别检查以下能力，并记录 available、unauthorized、not_installed、missing 或 stale：
 
 - broker-live：assets、positions、order history、order executions history。
-- market：quote、capital、market-temp。
+- market：quote、capital、market-temp；经用户明确批准的 LongbridgeAI 收盘分析 Skill。
 - calendar：finance-calendar、macrodata。
 - performance：profit-analysis。
 
@@ -62,7 +62,7 @@
 - quote 只证明 Longbridge 返回的真实标的或代理的行情。
 - capital 只称为标的资金流，不能扩展成全市场资金流。
 - market-temp 只作为 Longbridge 市场字段，不能单独生成风险偏好结论。
-- 收盘市场环境只从固定六代理的同一 review_date 完成日线生成可复算的定价倾向；SPY/QQQ 是核心权益门，其他资产只作确认或反例。不能把同日相关性写成宏观因果，也不能用盘前/夜盘 quote 更新该结论。
+- 收盘市场环境在六个固定代理的同一 review_date 完成日线齐备时，使用用户已批准的 LongbridgeAI 公共分析 Skill 和固定收盘提示生成结构化结论、最多三条支持事实及下一交易日验证条件；原始回答和引用不进入展示。不能把同日价格变化写成宏观因果，也不能用盘前/夜盘 quote 更新该结论。
 - finance-calendar 和 macrodata 的事件必须经过相关性筛选。
 - 计划、候选池和 Codex 判断都不能替代实际成交事实。
 - 当前持仓快照不能替代历史持仓、收盘持仓或整周对账。

@@ -13,6 +13,7 @@
 | quote | market | 实际返回标的或代理的最新值、涨跌幅、阶段和时间 | 捏造 symbol、把代理标成指数本体 |
 | capital | market | 标的级资金流和时间窗口 | 全市场资金流、方向推断、因果结论 |
 | market-temp | market | Longbridge 返回的市场温度字段和时间 | 把温度单独解释成确定性风险偏好 |
+| market-analysis-agent | market | 用户批准的 LongbridgeAI 固定收盘提示：同一 review_date 的结论、最多三条支持事实和下一交易日验证条件 | 账户、持仓、订单、资金、原始回答、引用和无界叙事 |
 | finance-calendar | events | 相关事件、双时区、状态、来源和风险通道 | 无关财报、完整日历复制、无排期占位 |
 | macrodata | market、events | Longbridge 返回且通过筛选的宏观字段/事件 | 外部政策事实、完整新闻或宏观馈送 |
 | kline history | 条件式计划证据 | 已完成 1D OHLCV，明确复权/时区，EMA20/50/200、ATR14、可追溯结构位 | 全市场扫描、未完成日线、SMA 替代、其他 provider 回退 |

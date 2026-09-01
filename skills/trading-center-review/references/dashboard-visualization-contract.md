@@ -106,9 +106,9 @@ ny_start/ny_end 和 utc_start/utc_end 必须是严格 RFC3339（含 `T`、秒和
 
 - basis：固定 `completed_close`。
 - market_date：必须等于 meta.review_date。
-- environment：包含私有 status、headline、1–3 条 pricing_signals、cross_asset_confirmation、next_session_watch。
+- environment：包含私有 status、headline、0–3 条 evidence、next_session_watch；complete 时 evidence 至少一条。
 
-启用该组时 market.items 必须且只能是 `SPY.US`、`QQQ.US`、`IEF.US`、`GLD.US`、`USO.US`、`IBIT.US`。complete 行的 session 固定“收盘”、state 固定“已完成收盘”，as_of 转为 America/New_York 后必须等于 market_date；不得把 quote、夜盘或盘前数据改标签冒充。environment.status=complete 需要六项收盘均 complete；SPY/QQQ 任一缺失时 headline 固定说明本次不形成判断，其他代理缺失时说明跨资产确认不足。status 继续私有校验，前台不显示徽标。
+启用该组时 market.items 必须且只能是 `SPY.US`、`QQQ.US`、`IEF.US`、`GLD.US`、`USO.US`、`IBIT.US`。complete 行的 session 固定“收盘”、state 固定“已完成收盘”，as_of 转为 America/New_York 后必须等于 market_date；不得把 quote、夜盘或盘前数据改标签冒充。environment.status=complete 需要六项收盘均 complete，并且由 LongbridgeAI 固定收盘提示返回同一日期的结构化结果；任一收盘缺失时 environment 为 partial，headline 明确说明本次不形成判断。status 继续私有校验，前台不显示徽标。
 
 每个 item 必须包含：
 
@@ -128,7 +128,7 @@ ny_start/ny_end 和 utc_start/utc_end 必须是严格 RFC3339（含 `T`、秒和
 
 `state` 和 `data_status` 继续用于私有验证与方向着色门禁，但市场雷达前台只显示资产/指数、最新值和涨跌幅，不显示逐行“状态”列、模块完成徽标、重复来源时间或周度市场背景。
 
-环境判断前台只显示：环境结论、三组主要定价信号、跨资产确认、下一交易日观察。它不展示 facts/checks/gaps 等后台结构，不写已证明的价格因果，不包含持仓、买入计划、周度纪律或具体买卖指令。
+环境判断前台只显示：环境结论、最多三条支持事实、下一交易日验证条件。它不展示 LongbridgeAI 原始回答/引用、facts/checks/gaps 等后台结构，不写已证明的价格因果，不包含持仓、买入计划、周度纪律或具体买卖指令。
 
 可选字段：
 

@@ -18,13 +18,12 @@ function withCloseEnvironment(v: any): any {
   Object.assign(v.daily.market, {
     basis: 'completed_close', market_date: '2026-08-28',
     environment: {
-      status: 'complete', headline: '权益收盘同步走强，市场风险偏好偏强，但仍需跨资产确认。',
-      pricing_signals: [
-        { label: '权益', text: 'SPY +0.50%，QQQ +0.80%' },
-        { label: '利率与避险代理', text: 'IEF +0.20%，GLD −0.10%' },
-        { label: '高波动与通胀代理', text: 'IBIT +1.10%，USO +0.30%' },
+      status: 'complete', headline: '权益收盘同步走强，市场风险偏好偏强。',
+      evidence: [
+        'SPY +0.50%，QQQ +0.80%。',
+        'IEF +0.20%，GLD −0.10%。',
+        'IBIT +1.10%，USO +0.30%。',
       ],
-      cross_asset_confirmation: 'IBIT 与权益同向，高波动风险偏好得到确认。',
       next_session_watch: '观察 SPY 与 QQQ 能否继续同向，并看 IBIT 是否保持确认。',
     },
   });
@@ -101,10 +100,17 @@ test('radar keeps decision values while redundant premarket and verification UI 
   assert.match(html, /v2-market-direction[^>]*><strong>−1\.25%<\/strong>/);
   assert.match(html, /市场环境判断/);
   assert.match(html, /基于 2026-08-28 收盘/);
-  assert.match(html, /只记录上一交易日收盘定价，不随盘前或盘中行情刷新/);
+  assert.match(html, /只基于该收盘日的公开市场收盘分析，不随盘前或盘中行情刷新/);
+  assert.match(html, /支持事实/);
+  assert.match(html, /下一交易日验证/);
   assert.doesNotMatch(html, /v2-meter-dot|aria-label="强度|<span>强度<\/span>|<span>状态<\/span>|v2-market-state/);
-  assert.doesNotMatch(html, /Codex 盘前判断|待确认事项|周度判断与纪律|周度市场背景|Longbridge ·/);
+  assert.doesNotMatch(html, /Codex 盘前判断|待确认事项|周度判断与纪律|周度市场背景|LongbridgeAI|Skill|Longbridge ·/);
   assert.equal(normalized(html), normalized(pythonRender(validate(v))));
+});
+test('public renderer rechecks the data boundary before emitting HTML', () => {
+  const v = withCloseEnvironment(snapshot());
+  v.daily.market.environment.headline = 'LongbridgeAI 判断：整体中性。';
+  assert.throws(() => render(v));
 });
 test('valuation is inline, scoped, formula-checked and shares the Python projection', () => {
   const v = snapshot();

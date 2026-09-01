@@ -242,27 +242,33 @@
       line-height: 1.7;
       overflow-wrap: anywhere;
     }
-    .v2-environment-signals {
-      display: grid;
-      gap: 8px;
-    }
-    .v2-environment-signal,
     .v2-environment-summary {
       padding: 11px 12px;
       border: 1px solid var(--v2-line-soft);
       border-radius: 7px;
       background: var(--v2-panel);
     }
-    .v2-environment-signal strong,
     .v2-environment-summary strong {
       color: var(--v2-ink-soft);
       font-size: 12px;
     }
-    .v2-environment-signal p,
     .v2-environment-summary p {
       margin-top: 3px;
       color: var(--v2-ink-soft);
       overflow-wrap: anywhere;
+    }
+    .v2-environment-evidence {
+      margin: 8px 0 0;
+      padding-left: 20px;
+      color: var(--v2-ink-soft);
+    }
+    .v2-environment-evidence li {
+      margin-top: 6px;
+      overflow-wrap: anywhere;
+    }
+    .v2-environment-empty {
+      margin-top: 8px;
+      color: var(--v2-muted);
     }
     .v2-environment-summary { margin-top: 10px; }
     .v2-environment-watch {

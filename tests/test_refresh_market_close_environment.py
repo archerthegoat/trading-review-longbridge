@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -48,6 +49,21 @@ def display_snapshot():
     return MODULE.dashboard.project_display_snapshot(completed_close_packet(), None)
 
 
+def agent_response(conclusion="权益市场收盘表现平稳。", evidence=None, watch="验证下一交易日是否延续"):
+    return {
+        "status": "succeeded",
+        "answer": json.dumps(
+            {
+                "market_date": "2026-08-28",
+                "conclusion": conclusion,
+                "evidence": evidence or ["SPY 与 QQQ 收盘同向。"],
+                "next_session_watch": watch,
+            },
+            ensure_ascii=False,
+        ),
+    }
+
+
 class MarketCloseEnvironmentTests(unittest.TestCase):
     def test_completed_bar_uses_previous_completed_close(self):
         response = {
@@ -65,6 +81,7 @@ class MarketCloseEnvironmentTests(unittest.TestCase):
         result = MODULE.refresh_snapshot(
             display_snapshot(),
             facts(),
+            agent_response=agent_response(),
             now=dt.datetime(2026, 9, 1, 21, 0, tzinfo=MODULE.SHANGHAI_TZ),
         )
         market = result["daily"]["market"]
@@ -79,6 +96,7 @@ class MarketCloseEnvironmentTests(unittest.TestCase):
         result = MODULE.refresh_snapshot(
             display_snapshot(),
             partial,
+            agent_response=None,
             now=dt.datetime(2026, 9, 1, 21, 0, tzinfo=MODULE.SHANGHAI_TZ),
         )
         environment = result["daily"]["market"]["environment"]
@@ -87,6 +105,42 @@ class MarketCloseEnvironmentTests(unittest.TestCase):
             environment["headline"],
             "上一交易日收盘数据尚未齐备，本次不形成市场环境判断。",
         )
+        self.assertEqual(environment["evidence"], [])
+
+    def test_complete_close_requires_agent_response(self):
+        with self.assertRaises(MODULE.MarketCloseRefreshError):
+            MODULE.refresh_snapshot(
+                display_snapshot(),
+                facts(),
+                agent_response=None,
+                now=dt.datetime(2026, 9, 1, 21, 0, tzinfo=MODULE.SHANGHAI_TZ),
+            )
+
+    def test_agent_date_and_shape_are_admitted(self):
+        environment = MODULE.parse_agent_environment(
+            agent_response(evidence=["事实一", "事实二"]), "2026-08-28"
+        )
+        self.assertEqual(environment["status"], "complete")
+        self.assertEqual(environment["evidence"], ["事实一", "事实二"])
+        with self.assertRaises(MODULE.MarketCloseRefreshError):
+            MODULE.parse_agent_environment(agent_response(), "2026-08-29")
+        with self.assertRaises(MODULE.MarketCloseRefreshError):
+            MODULE.parse_agent_environment(
+                agent_response(evidence=["账户信息不应进入市场判断"]), "2026-08-28"
+            )
+        for forbidden in (
+            "LongbridgeAI 判断",
+            "Skill 输出",
+            "long bias",
+            "long call",
+            "buying opportunity",
+            "purchase now",
+        ):
+            with self.subTest(forbidden=forbidden):
+                with self.assertRaises(MODULE.MarketCloseRefreshError):
+                    MODULE.parse_agent_environment(
+                        agent_response(conclusion=forbidden), "2026-08-28"
+                    )
 
 
 if __name__ == "__main__":

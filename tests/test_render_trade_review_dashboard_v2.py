@@ -52,13 +52,12 @@ def completed_close_packet():
         market_date="2026-08-28",
         environment={
             "status": "complete",
-            "headline": "权益收盘同步走强，市场风险偏好偏强，但仍需跨资产确认。",
-            "pricing_signals": [
-                {"label": "权益", "text": "SPY +0.50%，QQQ +0.80%"},
-                {"label": "利率与避险代理", "text": "IEF +0.20%，GLD −0.10%"},
-                {"label": "高波动与通胀代理", "text": "IBIT +1.10%，USO +0.30%"},
+            "headline": "权益收盘同步走强，市场风险偏好偏强。",
+            "evidence": [
+                "SPY +0.50%，QQQ +0.80%。",
+                "IEF +0.20%，GLD −0.10%。",
+                "IBIT +1.10%，USO +0.30%。",
             ],
-            "cross_asset_confirmation": "IBIT 与权益同向，高波动风险偏好得到确认。",
             "next_session_watch": "观察 SPY 与 QQQ 能否继续同向，并看 IBIT 是否保持确认。",
         },
     )
@@ -216,13 +215,23 @@ class DashboardV2RendererTests(unittest.TestCase):
         template = TEMPLATE_PATH.read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: minmax(0, 1.18fr) minmax(280px, .82fr)", template)
         self.assertIn("基于 2026-08-28 收盘", rendered)
-        self.assertIn("只记录上一交易日收盘定价，不随盘前或盘中行情刷新。", rendered)
+        self.assertIn("只基于该收盘日的公开市场收盘分析，不随盘前或盘中行情刷新。", rendered)
+        self.assertIn("支持事实", rendered)
+        self.assertIn("下一交易日验证", rendered)
         for removed in ("Codex 盘前判断", "待确认事项", "周度判断与纪律", "周度市场背景"):
             self.assertNotIn(removed, rendered)
         self.assertNotIn('<span>状态</span>', rendered)
         self.assertNotIn('class="v2-market-state"', rendered)
         self.assertNotIn("v2-bottom-grid", rendered)
         self.assertIn(".v2-plans, .v2-events { border-bottom:", template)
+
+    def test_market_environment_display_rejects_internal_or_action_text(self):
+        for forbidden in ("LongbridgeAI 判断：整体中性。", "Skill 输出：整体中性。", "长期偏多。", "example.com"):
+            with self.subTest(forbidden=forbidden):
+                packet = completed_close_packet()
+                packet["market"]["environment"]["headline"] = forbidden
+                with self.assertRaises(MODULE.DashboardRenderError):
+                    MODULE.validate_packet(packet)
 
     def test_native_controls_cover_tabs_filters_and_details(self):
         rendered = self.render(fixture("complete"))

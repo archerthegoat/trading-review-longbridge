@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { CalendarEvent, Daily, DisplaySnapshot, ExecutionContext, PlanDetail, Position, Status, Weekly, WeeklyItem, WeeklySection } from './types.ts';
+import { validate } from './data.ts';
 
 const TEMPLATE = new URL('../assets/trade-review-dashboard-v2-standalone.html', import.meta.url);
 const MARKER = '<!--__TRADING_REVIEW_DASHBOARD_V2_BODY__-->';
@@ -81,8 +82,11 @@ function market(d: Daily): string {
 function marketEnvironment(d: Daily): string {
   const m = d.market, environment = m.environment;
   if (!environment) return '';
-  const signals = environment.pricing_signals.map(row => `<article class="v2-environment-signal"><strong>${ui(row.label)}</strong><p>${ui(row.text)}</p></article>`).join('');
-  return `<section class="v2-judgement" aria-labelledby="environment-heading"><div class="v2-section-title"><h1 id="environment-heading">市场环境判断 <span>基于 ${escape(m.market_date)} 收盘</span></h1></div><p class="v2-headline">${ui(environment.headline)}</p><div class="v2-environment-signals">${signals}</div><div class="v2-environment-summary"><strong>跨资产确认</strong><p>${ui(environment.cross_asset_confirmation)}</p></div><div class="v2-environment-summary v2-environment-watch"><strong>下一交易日观察</strong><p>${ui(environment.next_session_watch)}</p></div><p class="v2-environment-boundary">只记录上一交易日收盘定价，不随盘前或盘中行情刷新。</p></section>`;
+  const evidence = environment.evidence.map(item => `<li>${ui(item)}</li>`).join('');
+  const evidenceBlock = evidence
+    ? `<ul class="v2-environment-evidence">${evidence}</ul>`
+    : '<p class="v2-environment-empty">该收盘日暂无可展示的分析证据。</p>';
+  return `<section class="v2-judgement" aria-labelledby="environment-heading"><div class="v2-section-title"><h1 id="environment-heading">市场环境判断 <span>基于 ${escape(m.market_date)} 收盘</span></h1></div><p class="v2-headline">${ui(environment.headline)}</p><div class="v2-environment-summary"><strong>支持事实</strong>${evidenceBlock}</div><div class="v2-environment-summary v2-environment-watch"><strong>下一交易日验证</strong><p>${ui(environment.next_session_watch)}</p></div><p class="v2-environment-boundary">只基于该收盘日的公开市场收盘分析，不随盘前或盘中行情刷新。</p></section>`;
 }
 function operations(d: Daily): string {
   const o = d.operations, e = o.executions;
@@ -248,11 +252,12 @@ function dataNote(d: Daily, w: Weekly | null): string {
   return `<details class="v2-data-note"><summary><strong>更新与使用说明</strong><span>点击展开</span></summary><div class="v2-data-content"><p>${marketTime}</p><p>周度更新：${w ? escape(timeLabel(w.meta.generated_at)) : '尚未生成'}。周度内容不随每日页面刷新而重新计算。</p><p>刷新仅重载这份记录，不代表新行情；未确认的计划不能直接执行。</p></div></details>`;
 }
 
-/** Only call with a snapshot admitted by the data boundary. No user template overrides. */
+/** Recheck the public boundary so callers cannot render an unadmitted snapshot. */
 export function render(snapshot: DisplaySnapshot): string {
+  const admitted = validate(snapshot);
   const template = readFileSync(TEMPLATE, 'utf8');
   if (template.split(MARKER).length !== 2 || /<script|<iframe|<link|<img|<object|<embed|<svg|srcdoc|\bon[a-z][a-z0-9_-]*\s*=|javascript:|@import|url\(|https?:\/\//i.test(template)) throw new Error('unsafe_bundled_template');
-  const d = snapshot.daily, w = snapshot.weekly;
+  const d = admitted.daily, w = admitted.weekly;
   const environment = marketEnvironment(d);
   const topClass = environment ? 'v2-top-grid v2-top-grid-with-environment' : 'v2-top-grid';
   const body = `${header(d, w)}<div class="${topClass}"><div class="v2-market-pane">${market(d)}</div>${environment ? `<div class="v2-environment-pane">${environment}</div>` : ''}</div>${operations(d)}${positions(d, w)}${events(d, w)}${dataNote(d, w)}`;
