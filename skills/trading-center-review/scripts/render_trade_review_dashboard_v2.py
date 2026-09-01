@@ -1719,13 +1719,12 @@ def _render_header(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
       <div class="v2-boundary-strip">
         <span>{_ui(meta["review_label"], "盘前观察与交易纪律")}</span>
         <span>行情截至 {_escape(_time_label(meta["market_as_of"]))}</span>
-        {_status_badge(meta["overall_status"])}
       </div>
       {_render_weekly_context(weekly)}
     """
 
 
-def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = None) -> str:
+def _render_market(packet: Dict[str, Any]) -> str:
     market = packet["market"]
     rows = []
     for row in market["items"]:
@@ -1750,8 +1749,7 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
             flow_value = _format_number(capital["value"])
             flow = (
                 f'<small class="v2-flow">标的资金流 · '
-                f'{_escape(capital["label"])} {flow_value} · '
-                f'{_escape(STATUS_LABELS[capital["data_status"]])}</small>'
+                f'{_escape(capital["label"])} {flow_value}</small>'
             )
         unavailable = (
             f'<small class="v2-unavailable-note">{_ui(row["unavailable_reason"], "报价待核对")}</small>'
@@ -1768,9 +1766,6 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
               </div>
               <div class="v2-market-value"><strong>{_escape(value)}</strong></div>
               <div class="v2-market-direction {_direction_class(direction_tone)}"><strong>{_escape(change)}</strong></div>
-              <div class="v2-market-state">
-                <strong>{_ui(row["state"])}</strong>
-              </div>
             </div>
             """
         )
@@ -1783,80 +1778,14 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
       <section class="v2-market" aria-labelledby="market-heading">
         <div class="v2-section-title">
           <h1 id="market-heading">市场风险雷达</h1>
-          {_module_status(market["status"])}
         </div>
         <p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p>
         <div class="v2-market-head" role="row">
-          <span>资产/指数</span><span>最新值</span><span>涨跌幅</span><span>状态</span>
+          <span>资产/指数</span><span>最新值</span><span>涨跌幅</span>
         </div>
         <div class="v2-market-list" role="table">
           {body}
         </div>
-        <p class="v2-side-note">Longbridge · {_escape(_time_label(packet["meta"]["market_as_of"]))}</p>
-        {_weekly_inline(weekly, "market_radar", "周度市场背景")}
-      </section>
-    """
-
-
-def _render_analysis(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = None) -> str:
-    analysis = packet["codex_analysis"]
-
-    def render_items(items: Sequence[Mapping[str, Any]], empty: str) -> str:
-        visible = [item for item in items if _ui(item["text"], "")]
-        if not visible:
-            return f'<li class="v2-empty-inline">{_escape(empty)}</li>'
-        return "".join(
-            f'<li><strong>{_ui(item["label"], "观察")}</strong><span>{_ui(item["text"])}</span></li>'
-            for item in visible
-        )
-
-    facts = render_items(analysis["facts"], "暂无已确认事实")
-    risks = render_items(analysis["risks"], "暂无已确认主要风险")
-    interpretations = render_items(analysis["interpretation"], "暂无额外解释")
-    gaps = render_items(analysis["gaps"], "当前没有额外缺口")
-    checks = []
-    for check in analysis["checks"]:
-        checks.append(
-            f"""
-            <div class="v2-check-row">
-              <div><strong>如果</strong><span>{_ui(check["if"], "条件待确认")}</span></div>
-              <div><strong>则</strong><span>{_ui(check["then"], "先核对计划再行动")}</span></div>
-              <div><strong>否则</strong><span>{_ui(check["else"], "等待确认，不新增动作")}</span></div>
-            </div>
-            """
-        )
-    checks_body = "".join(checks) if checks else '<p class="v2-empty-inline">暂无条件式检查</p>'
-    return f"""
-      <section class="v2-judgement" aria-labelledby="judgement-heading">
-        <div class="v2-section-title">
-          <h1 id="judgement-heading">Codex 盘前判断 <span>（核心结论）</span></h1>
-          {_module_status(analysis["status"])}
-          <span class="v2-period">{_ui(packet["meta"]["period_label"], "盘前观察")}</span>
-        </div>
-        <p class="v2-headline">{_ui(analysis["headline"], "先核对持仓计划，再评估新的买入机会。")}</p>
-        <div class="v2-analysis-grid">
-          <section class="v2-analysis-card v2-card-fact">
-            <h2>已确认事实</h2>
-            <ul>{facts}</ul>
-          </section>
-          <section class="v2-analysis-card v2-card-risk">
-            <h2>主要风险</h2>
-            <ul>{risks}</ul>
-          </section>
-        </div>
-        <section class="v2-analysis-card v2-card-interpretation">
-          <h2>Codex 解释</h2>
-          <ul>{interpretations}</ul>
-        </section>
-        <section class="v2-checks">
-          <h2>今日条件式行动</h2>
-          <div class="v2-check-list">{checks_body}</div>
-        </section>
-        <details class="v2-analysis-card v2-card-gap">
-          <summary>待确认事项</summary>
-          <ul>{gaps}</ul>
-        </details>
-        {_weekly_inline(weekly, "judgement", "周度判断与纪律")}
       </section>
     """
 
@@ -2446,9 +2375,8 @@ def _render_daily_content(
         _render_header(validated, weekly)
         + '<div class="v2-top-grid">'
         + '<div class="v2-market-pane">'
-        + _render_market(validated, weekly)
+        + _render_market(validated)
         + "</div>"
-        + _render_analysis(validated, weekly)
         + "</div>"
         + _render_operations(validated, weekly)
         + _render_positions(validated, weekly)

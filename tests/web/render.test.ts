@@ -62,7 +62,7 @@ test('internal diagnostics stay out but economic revisions remain visible', () =
   assert.match(html, /就业数据向下修订/); assert.doesNotMatch(html, /partition revision/);
   assert.doesNotMatch(html, /<script|<iframe|onload=|onclick=/i);
 });
-test('radar presents actual values and percentage changes, without a fabricated strength', () => {
+test('radar keeps decision values while redundant premarket and verification UI stay private', () => {
   const v = snapshot();
   v.daily.market.items[0]!.value = 123.45;
   v.daily.market.items[0]!.change_pct = -1.25;
@@ -72,7 +72,9 @@ test('radar presents actual values and percentage changes, without a fabricated 
   assert.match(html, /<span>最新值<\/span><span>涨跌幅<\/span>/);
   assert.match(html, /v2-market-value"><strong>123\.45<\/strong>/);
   assert.match(html, /v2-market-direction[^>]*><strong>−1\.25%<\/strong>/);
-  assert.doesNotMatch(html, /v2-meter-dot|aria-label="强度|<span>强度<\/span>/);
+  assert.doesNotMatch(html, /v2-meter-dot|aria-label="强度|<span>强度<\/span>|<span>状态<\/span>|v2-market-state/);
+  assert.doesNotMatch(html, /Codex 盘前判断|待确认事项|周度判断与纪律|周度市场背景|Longbridge ·/);
+  assert.equal(normalized(html), normalized(pythonRender(validate(v))));
 });
 test('valuation is inline, scoped, formula-checked and shares the Python projection', () => {
   const v = snapshot();

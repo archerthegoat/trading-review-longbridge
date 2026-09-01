@@ -160,11 +160,10 @@ class DashboardV2RendererTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.DashboardRenderError, "conflicts"):
             MODULE.validate_packet(packet)
 
-    def test_page_order_matches_option_two(self):
+    def test_page_order_omits_redundant_premarket_and_market_status(self):
         rendered = self.render(fixture("complete"))
         labels = [
             "市场风险雷达",
-            "Codex 盘前判断",
             "上一交易日成交",
             "持仓 × 计划",
             "重要事件与时间轴",
@@ -174,7 +173,11 @@ class DashboardV2RendererTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("v2-top-grid", rendered)
         template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        self.assertIn("grid-template-columns: minmax(380px, 42fr) minmax(0, 58fr)", template)
+        self.assertIn("grid-template-columns: 1fr", template)
+        for removed in ("Codex 盘前判断", "待确认事项", "周度判断与纪律", "周度市场背景"):
+            self.assertNotIn(removed, rendered)
+        self.assertNotIn('<span>状态</span>', rendered)
+        self.assertNotIn('class="v2-market-state"', rendered)
         self.assertNotIn("v2-bottom-grid", rendered)
         self.assertIn(".v2-plans, .v2-events { border-bottom:", template)
 

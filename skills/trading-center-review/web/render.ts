@@ -61,24 +61,18 @@ function weeklyInline(w: Weekly | null, section: WeeklySection, heading: string)
 function header(d: Daily, w: Weekly | null): string {
   const m = d.meta;
   return `<header class="v2-header"><div class="v2-brand"><strong>美股复盘</strong></div><div class="v2-header-meta"><span>日度回看</span><strong>${escape(m.review_date)}</strong><span>（ET）</span></div><div class="v2-header-meta v2-header-cutoff"><span>内容更新</span><strong>${escape(timeLabel(m.generated_at))}</strong></div></header>
-  <div class="v2-boundary-strip"><span>${ui(m.review_label, '盘前观察与交易纪律')}</span><span>行情截至 ${escape(timeLabel(m.market_as_of))}</span>${badge(m.overall_status)}</div>${weeklyContext(w)}`;
+  <div class="v2-boundary-strip"><span>${ui(m.review_label, '盘前观察与交易纪律')}</span><span>行情截至 ${escape(timeLabel(m.market_as_of))}</span></div>${weeklyContext(w)}`;
 }
-function market(d: Daily, w: Weekly | null): string {
+function market(d: Daily): string {
   const m = d.market;
   const rows = m.items.map(r => {
     const direction = m.status === 'complete' && r.data_status === 'complete' ? r.direction : 'flat';
-    const flow = r.capital_flow ? `<small class="v2-flow">标的资金流 · ${escape(r.capital_flow.label)} ${number(r.capital_flow.value)} · ${escape(labels[r.capital_flow.data_status])}</small>` : '';
+    const flow = r.capital_flow ? `<small class="v2-flow">标的资金流 · ${escape(r.capital_flow.label)} ${number(r.capital_flow.value)}</small>` : '';
     const unavailable = r.unavailable_reason ? `<small class="v2-unavailable-note">${ui(r.unavailable_reason, '报价待核对')}</small>` : '';
     return `<div class="v2-market-row"><div class="v2-market-name"><strong>${ui(r.name)}</strong><small>${ui(r.symbol)}${r.is_proxy ? ` · 代理：${ui(r.proxy_for)}` : ''} · ${ui(r.session)}</small>${flow}${unavailable}</div>
-      <div class="v2-market-value"><strong>${escape(number(r.value))}</strong></div><div class="v2-market-direction v2-direction-${direction}"><strong>${escape(pct(r.change_pct))}</strong></div><div class="v2-market-state"><strong>${ui(r.state)}</strong></div></div>`;
+      <div class="v2-market-value"><strong>${escape(number(r.value))}</strong></div><div class="v2-market-direction v2-direction-${direction}"><strong>${escape(pct(r.change_pct))}</strong></div></div>`;
   }).join('') || '<div class="v2-empty">暂无已确认市场数据</div>';
-  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1>${badge(m.status)}</div><p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>最新值</span><span>涨跌幅</span><span>状态</span></div><div class="v2-market-list" role="table">${rows}</div><p class="v2-side-note">Longbridge · ${escape(timeLabel(d.meta.market_as_of))}</p>${weeklyInline(w, 'market_radar', '周度市场背景')}</section>`;
-}
-function analysis(d: Daily, w: Weekly | null): string {
-  const a = d.codex_analysis;
-  const items = (rows: { label: string; text: string }[], empty: string) => rows.filter(r => ui(r.text, '')).map(r => `<li><strong>${ui(r.label, '观察')}</strong><span>${ui(r.text)}</span></li>`).join('') || `<li class="v2-empty-inline">${escape(empty)}</li>`;
-  const checks = a.checks.map(c => `<div class="v2-check-row"><div><strong>如果</strong><span>${ui(c.if, '条件待确认')}</span></div><div><strong>则</strong><span>${ui(c.then, '先核对计划再行动')}</span></div><div><strong>否则</strong><span>${ui(c.else, '等待确认，不新增动作')}</span></div></div>`).join('') || '<p class="v2-empty-inline">暂无条件式检查</p>';
-  return `<section class="v2-judgement" aria-labelledby="judgement-heading"><div class="v2-section-title"><h1 id="judgement-heading">Codex 盘前判断 <span>（核心结论）</span></h1>${badge(a.status)}<span class="v2-period">${ui(d.meta.period_label, '盘前观察')}</span></div><p class="v2-headline">${ui(a.headline, '先核对持仓计划，再评估新的买入机会。')}</p><div class="v2-analysis-grid"><section class="v2-analysis-card v2-card-fact"><h2>已确认事实</h2><ul>${items(a.facts, '暂无已确认事实')}</ul></section><section class="v2-analysis-card v2-card-risk"><h2>主要风险</h2><ul>${items(a.risks, '暂无已确认主要风险')}</ul></section></div><section class="v2-analysis-card v2-card-interpretation"><h2>Codex 解释</h2><ul>${items(a.interpretation, '暂无额外解释')}</ul></section><section class="v2-checks"><h2>今日条件式行动</h2><div class="v2-check-list">${checks}</div></section><details class="v2-analysis-card v2-card-gap"><summary>待确认事项</summary><ul>${items(a.gaps, '当前没有额外缺口')}</ul></details>${weeklyInline(w, 'judgement', '周度判断与纪律')}</section>`;
+  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1></div><p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>最新值</span><span>涨跌幅</span></div><div class="v2-market-list" role="table">${rows}</div></section>`;
 }
 function operations(d: Daily): string {
   const o = d.operations, e = o.executions;
@@ -248,6 +242,6 @@ export function render(snapshot: DisplaySnapshot): string {
   const template = readFileSync(TEMPLATE, 'utf8');
   if (template.split(MARKER).length !== 2 || /<script|<iframe|<link|<img|<object|<embed|<svg|srcdoc|\bon[a-z][a-z0-9_-]*\s*=|javascript:|@import|url\(|https?:\/\//i.test(template)) throw new Error('unsafe_bundled_template');
   const d = snapshot.daily, w = snapshot.weekly;
-  const body = `${header(d, w)}<div class="v2-top-grid"><div class="v2-market-pane">${market(d, w)}</div>${analysis(d, w)}</div>${operations(d)}${positions(d, w)}${events(d, w)}${dataNote(d, w)}`;
+  const body = `${header(d, w)}<div class="v2-top-grid"><div class="v2-market-pane">${market(d)}</div></div>${operations(d)}${positions(d, w)}${events(d, w)}${dataNote(d, w)}`;
   return template.replace(MARKER, `<div class="v2-shell"><main class="v2-unified-view">${body}</main></div>`).replace('<title>交易中心 · 盘前复盘 V2</title>', '<title>交易中心 · 复盘</title>');
 }
