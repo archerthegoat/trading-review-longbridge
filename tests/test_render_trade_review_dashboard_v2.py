@@ -845,10 +845,45 @@ class DashboardV2RendererTests(unittest.TestCase):
         packet["operations"]["orders"]["count"] = 987654
         before = copy.deepcopy(packet)
         rendered = self.render(packet)
-        self.assertIn("已成交占位", rendered)
-        for marker in ("未成交委托占位", "仅文案声称成交占位", "提交订单", "987654", "订单 <strong>"):
+        # Legacy free-text rows are admitted only for compatibility and are
+        # rendered as a neutral, pending structured row.  Their display_name,
+        # action and role text cannot establish a trade type or plan relation.
+        self.assertIn("成交 · DEMO.HEDGE", rendered)
+        self.assertIn("工具待确认 · 待确认", rendered)
+        for marker in ("已成交占位", "未成交委托占位", "仅文案声称成交占位", "提交订单", "987654", "订单 <strong>"):
             self.assertNotIn(marker, rendered)
         self.assertEqual(packet, before)
+
+    def test_structured_operations_show_safe_type_and_plan_status(self):
+        packet = fixture("complete")
+        row = packet["operations"]["items"][0]
+        row.clear()
+        row.update(
+            symbol="DEMO.US:OPTION",
+            display_name="DEMO",
+            side="buy",
+            trade_type="long_call",
+            option_right="call",
+            plan_status="confirmed_plan",
+            plan_status_note="合成的成交前确认计划已匹配。",
+            execution_count=1,
+            data_status="complete",
+            reconciliation="合成内部勾稽，不进入展示。",
+        )
+        rendered = self.render(packet)
+        self.assertIn("买入 · DEMO", rendered)
+        self.assertIn("Long Call · 已确认计划", rendered)
+        self.assertNotIn("Long Call Call", rendered)
+        self.assertIn("来源：合成的成交前确认计划已匹配", rendered)
+        self.assertIn("合成的成交前确认计划已匹配", rendered)
+        self.assertNotIn("合成内部勾稽，不进入展示", rendered)
+
+    def test_structured_operation_requires_all_replacement_fields(self):
+        packet = fixture("complete")
+        row = packet["operations"]["items"][0]
+        row["trade_type"] = "unknown"
+        with self.assertRaises(MODULE.DashboardRenderError):
+            self.render(packet)
 
     def test_zero_fills_and_missing_fill_details_are_not_conflated(self):
         packet = fixture("complete")

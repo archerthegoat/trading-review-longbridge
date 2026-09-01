@@ -527,3 +527,13 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 4. 检查成交、持仓计划、两个筛选和事件展开，确认顶部改动未影响原交互；Console 无异常、初始 HTML 后无外部 Network 请求。
 
 记录：LongbridgeAI 文案与日期 PASS/FAIL ______；雷达/事件链 PASS/FAIL ______；刷新与交互 PASS/FAIL/NOT RUN ______；Console/Network PASS/FAIL/NOT RUN ______；总体验收 PASS/FAIL ______；备注 ______。
+
+## 14. 上一交易日成交结构化对齐（2026-09-02 已批准实现边界）
+
+本检查点只收窄既有 operations 展示契约：成交卡行级输出 `side`、`trade_type`、`option_right`、`plan_status`、`plan_status_note` 与 `execution_count`。允许的交易类型保持为 `stock`、`single_stock_leveraged_etf`、`long_call`、`zero_dte_option`、`other_option`、`unknown`；计划状态保持为 `confirmed_plan`、`mismatch`、`outside_plan`、`unknown`。结构化行不再承载旧 `action`、`role`、`state` 或 `plan_relation` 自由文案。
+
+旧展示快照仍可读，但在 Python 展示边界统一降级为中性 `other + unknown + unknown`，名称只由安全 symbol 派生，不能从旧文案推断工具、方向、Long Call 或计划关系。`long_call` 只有在期权右侧、实际工具和成交前已确认且已生效的精确计划一致时才写入；同一 underlying 的不同工具不共享覆盖。0DTE 只用 owner-only 原始执行时间和到期编码在内存中机械判断，输出永不包含具体合约身份、到期日、价格、数量、上游 ID、成本或佣金。确认/生效时间、工具/对象、方向或管理阶段证据不足为 `unknown`，已有生效计划但工具/方向/阶段不一致为 `mismatch`，明确不存在匹配的事前计划才为 `outside_plan`。
+
+`refresh_daily_operations.py` 复用已有 owner-only 成交工件与 SQLite v5 只读连接，严格拒绝混合 review date、未知结构、总数不一致和覆盖既有输出；成功结果通过 `trading-review-display.v1` 校验后才可进入现有 publish 入口。它不调用 Longbridge、不迁移或写数据库、不修改计划、Bridge、Obsidian、自动化或服务绑定。失败保持旧 publication；源码回滚使用精确 revert，页面回滚使用既有上一成功 publication，数据库不回滚。
+
+本实现对应 Python/TypeScript 同一静态 DOM：成交行只渲染安全方向、类型/右侧、计划关系和说明。合成回归覆盖 0DTE Call/Put、普通期权无计划、精确 Long Call 计划、同 underlying 错工具、工具证据不足、计划生效晚于成交、零/缺失/partial/stale/expired、隐私过滤和输入不变性。自动测试不等于浏览器或人工验收；本节人工验收保持 **PENDING**，除非用户针对确切 commit/build 明确记录 PASS。

@@ -38,6 +38,13 @@ export interface CalendarEvent {
   data_status: Status; object: string; impact_channel: string;
   watch_for?: string; kind?: 'macro' | 'earnings' | 'fed_speech'; speaker?: string; source_url?: string;
 }
+export interface Operation {
+  symbol: string; display_name: string; side: 'buy' | 'sell' | 'other';
+  trade_type: 'stock' | 'single_stock_leveraged_etf' | 'long_call' | 'zero_dte_option' | 'other_option' | 'unknown';
+  option_right: 'call' | 'put' | null;
+  plan_status: 'confirmed_plan' | 'mismatch' | 'outside_plan' | 'unknown';
+  plan_status_note: string; data_status: Status; execution_count: number | null;
+}
 export interface Daily {
   meta: { review_label: string; review_date: string; generated_at: string; market_as_of: string;
     previous_trading_window: { label: string; market_date: string; ny_start: string; ny_end: string; utc_start: string; utc_end: string };
@@ -55,7 +62,7 @@ export interface Daily {
     checks: { if: string; then: string; else: string; evidence_refs: string[]; boundary: string }[] };
   operations: Module & { window_label: string; market_scope?: 'US';
     executions: { count: number | null; data_status: Status; note: string };
-    items: { symbol: string; display_name: string; action: string; role: string; state: string; plan_relation: string; data_status: Status; execution_count?: number | null }[] };
+    items: Operation[] };
   positions_plans: Module & { items: Position[]; strategy_categories?: string[] };
   events: Module & { display_timezone: string; reference_at?: string; coverage?: { label: string; status: Status; note: string }[];
     groups: { date: string; label: string; range: string; events: CalendarEvent[] }[] };

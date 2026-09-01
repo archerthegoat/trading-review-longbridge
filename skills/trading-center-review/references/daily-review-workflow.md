@@ -24,7 +24,8 @@
 6. 把选定分析与同一事实包合并为 `trading-review-incremental-input.v1`，运行 `ingest-daily` 并回读 `run-manifest.json`。
 7. 用同一事实边界生成私有 Markdown、V2 JSON 和 standalone HTML。
 8. 日度市场环境启用时，运行 `refresh_market_close_environment.py`：它只读取固定六个公开代理，以 review_date 与前一完成日线替换市场雷达，并在同一私有展示快照中调用 LongbridgeAI 一次固定的收盘分析提示，投影为结论、最多三条支持事实和下一交易日验证条件。命令失败不覆盖上次成功页；收盘证据不齐则明确不形成判断。
-9. 当前机器已明确安装常驻服务时，读取 [本地展示发布指引](local-web-service.md)，用 `node skills/trading-center-review/web/cli.ts publish --daily-input ...` 或经校验的 `--display-input ...` 发布；未提供新周度输入时复用持久周度。未启用服务则保持私有 HTML，不自行安装或改调度。
+9. 需要刷新上一交易日成交卡时，在同一 owner-only 运行边界执行 `refresh_daily_operations.py`：它只读既有私有成交工件和 state store，通过执行时刻/到期编码、工具上下文及事前计划做结构化投影；不调用 Longbridge、不迁移或写数据库。缺少确认、生效、工具或对象证据时保持待确认，失败不得覆盖旧展示工件。
+10. 当前机器已明确安装常驻服务时，读取 [本地展示发布指引](local-web-service.md)，用 `node skills/trading-center-review/web/cli.ts publish --daily-input ...` 或经校验的 `--display-input ...` 发布；未提供新周度输入时复用持久周度。未启用服务则保持私有 HTML，不自行安装或改调度。
 
 生成页面前可只读最近周度 revision，用同一 renderer 合入原模块；不刷新周度时间、不写周度表。计划区间由已保存版本提供，`trade_plan_lifecycle.py enrich-daily` 只把区间卡片合入既有标的行。quote 只更新关系，不能移动区间；构造新 draft 或确认版本不是每日自动动作。
 

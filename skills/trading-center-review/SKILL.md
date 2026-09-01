@@ -97,6 +97,8 @@ Codex 分析缓存键固定为：
 3. owner-only standalone HTML。
 4. 不含账户数值、仓位数量或标的级事实的 `trading-review-run-manifest.v1`。
 
+成交卡若需从既有私有执行工件刷新，使用 `refresh_daily_operations.py` 的固定输入/输出边界。该 helper 只读 owner-only 原始执行文件和既有 SQLite 计划版本，输出结构化 `side`、`trade_type`、`option_right`、`plan_status`、`plan_status_note` 与 `execution_count`；`plan_status` 只允许 `confirmed_plan`、`mismatch`、`outside_plan`、`unknown`，旧自由文案安全降级为 `unknown`。它不调用 Longbridge、不写数据库，不把具体期权身份、价格、数量、上游 ID、成本或佣金带入展示工件。
+
 运行草稿校验和 V2 renderer。每日对话只交付通过 Schema、隐私和离线检查的 HTML 链接及简短状态；Markdown、完整事件工件和账户事实留在私有目录。
 
 本机已明确启用常驻展示时，通过 `node skills/trading-center-review/web/cli.ts publish` 发布同一校验结果，交付 `http://127.0.0.1:8765/`；日度未指定周度输入则复用持久周度内容。已持久化估值需要重建展示时显式加 `--enrich-db`，只读取限定标的白名单，不依赖临时页面，也不刷新行情时间。不能把服务常驻当成自动生成新数据。未安装时仍使用私有 HTML 工件，不自行安装。

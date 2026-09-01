@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import tempfile
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
@@ -50,6 +51,19 @@ DIRECTIONS = frozenset({"up", "down", "flat"})
 TONES = frozenset({"neutral", "blue", "green", "amber", "red"})
 PLAN_TABS = frozenset({"holdings", "plan"})
 VALUE_KINDS = frozenset({"money", "number", "text"})
+OPERATION_SIDES = frozenset({"buy", "sell", "other"})
+OPERATION_TRADE_TYPES = frozenset(
+    {
+        "stock",
+        "single_stock_leveraged_etf",
+        "long_call",
+        "zero_dte_option",
+        "other_option",
+        "unknown",
+    }
+)
+OPTION_RIGHTS = frozenset({"call", "put"})
+PLAN_STATUSES = frozenset({"confirmed_plan", "mismatch", "outside_plan", "unknown"})
 WEEKLY_SECTION_NAMES = (
     "market_radar",
     "judgement",
@@ -855,18 +869,35 @@ def _validate_operations(value: Any, *, display_only: bool = False) -> Dict[str,
     for index, raw in enumerate(rows):
         row_path = f"{path}.items[{index}]"
         row = _object(raw, row_path)
-        row_keys = {
+        legacy_keys = {
             "symbol", "display_name", "action", "role", "state",
             "plan_relation", "data_status",
         }
-        if not display_only:
-            row_keys.add("reconciliation")
-        _reject_unknown(
-            row,
-            row_keys | {"execution_count"},
-            row_path,
-        )
-        _required_keys(row, row_keys, row_path)
+        structured_keys = {
+            "symbol", "display_name", "side", "trade_type", "option_right",
+            "plan_status", "plan_status_note", "data_status",
+            "execution_count",
+        }
+        structured_markers = {
+            "side", "trade_type", "option_right", "plan_status",
+            "plan_status_note",
+        }
+        has_structured = bool(set(row) & structured_markers)
+        if has_structured:
+            # A structured row is a replacement contract, not a partially
+            # upgraded legacy row.  Keeping the old free-text fields beside
+            # it makes it possible for a renderer to accidentally trust the
+            # wrong source of truth.
+            allowed_keys = set(structured_keys)
+            required_keys = set(structured_keys)
+            if not display_only:
+                allowed_keys.add("reconciliation")
+        else:
+            required_legacy = legacy_keys | ({"reconciliation"} if not display_only else set())
+            allowed_keys = required_legacy | {"execution_count"}
+            required_keys = required_legacy
+        _reject_unknown(row, allowed_keys, row_path)
+        _required_keys(row, required_keys, row_path)
         data_status = _enum(row["data_status"], MODULE_STATUSES, f"{row_path}.data_status")
         child_statuses.append(data_status)
         if "execution_count" in row:
@@ -877,13 +908,43 @@ def _validate_operations(value: Any, *, display_only: bool = False) -> Dict[str,
         if item.get("market_scope") == "US" and not US_SYMBOL_RE.fullmatch(row["symbol"]):
             raise DashboardRenderError("US operation scope cannot contain an unverified or non-US symbol")
         _text(row["display_name"], f"{row_path}.display_name")
-        text_keys = ("action", "role", "state", "plan_relation")
-        if not display_only:
-            text_keys += ("reconciliation",)
-        for key in text_keys:
-            _text(row[key], f"{row_path}.{key}", required=data_status != "empty")
-            if data_status == "empty":
-                _require_empty_text(row[key], f"{row_path}.{key}")
+        if has_structured:
+            side = _enum(row["side"], OPERATION_SIDES, f"{row_path}.side")
+            trade_type = _enum(row["trade_type"], OPERATION_TRADE_TYPES, f"{row_path}.trade_type")
+            option_right = row["option_right"]
+            if option_right is not None:
+                option_right = _enum(option_right, OPTION_RIGHTS, f"{row_path}.option_right")
+            plan_status = _enum(row["plan_status"], PLAN_STATUSES, f"{row_path}.plan_status")
+            _text(row["plan_status_note"], f"{row_path}.plan_status_note")
+            symbol_is_option = row["symbol"].upper().endswith(":OPTION")
+            option_trade_type = trade_type in {"long_call", "zero_dte_option", "other_option"}
+            if option_trade_type and not symbol_is_option:
+                raise DashboardRenderError(f"{row_path} option trade type needs a sanitized option symbol")
+            if trade_type in {"stock", "single_stock_leveraged_etf"} and symbol_is_option:
+                raise DashboardRenderError(f"{row_path} non-option trade type conflicts with its sanitized symbol")
+            if option_right is not None and not symbol_is_option:
+                raise DashboardRenderError(f"{row_path} option right needs a sanitized option symbol")
+            if trade_type != "unknown" and option_trade_type != (option_right is not None):
+                # ``unknown`` may carry a known call/put right, but a named
+                # option type must always carry the corresponding right.
+                raise DashboardRenderError(f"{row_path} option right conflicts with its trade type")
+            if trade_type == "long_call" and option_right != "call":
+                raise DashboardRenderError(f"{row_path} Long Call requires call evidence")
+            if data_status == "empty" and (
+                side != "other" or trade_type != "unknown"
+                or plan_status != "unknown"
+            ):
+                raise DashboardRenderError(f"{row_path} empty structured trade must stay neutral")
+            if not display_only and "reconciliation" in row:
+                _text(row["reconciliation"], f"{row_path}.reconciliation")
+        else:
+            text_keys = ("action", "role", "state", "plan_relation")
+            if not display_only:
+                text_keys += ("reconciliation",)
+            for key in text_keys:
+                _text(row[key], f"{row_path}.{key}", required=data_status != "empty")
+                if data_status == "empty":
+                    _require_empty_text(row[key], f"{row_path}.{key}")
     known_executions = sum(row.get("execution_count") or 0 for row in rows)
     total = item["executions"]
     if total["data_status"] in {"complete", "empty"} and total["count"] is not None and known_executions > total["count"]:
@@ -1386,7 +1447,10 @@ def validate_display_snapshot(snapshot: Any) -> Dict[str, Any]:
     _required_keys(root, keys, "$display")
     if root["schema_version"] != DISPLAY_SCHEMA_VERSION:
         raise DashboardRenderError("unsupported display snapshot")
-    daily = validate_packet(root["daily"], display_only=True)
+    daily = copy.deepcopy(validate_packet(root["daily"], display_only=True))
+    daily["operations"]["items"] = [
+        _normalize_display_operation(row) for row in daily["operations"]["items"]
+    ]
     for row in daily["operations"]["items"]:
         if not _is_us(row["symbol"]) or (row.get("execution_count") or 0) <= 0:
             raise DashboardRenderError("display operations require confirmed US fills")
@@ -1401,6 +1465,29 @@ def validate_display_snapshot(snapshot: Any) -> Dict[str, Any]:
         if any(not _is_us(row["underlying"]) for row in weekly["review_episodes"]):
             raise DashboardRenderError("display weekly episodes must be US-only")
     return {"schema_version": DISPLAY_SCHEMA_VERSION, "daily": daily, "weekly": weekly}
+
+
+def _normalize_display_operation(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Convert legacy free-text operation rows to a neutral display contract."""
+
+    if "trade_type" in row:
+        return dict(row)
+    symbol = str(row["symbol"])
+    display_name = symbol.removesuffix(":OPTION").removesuffix(".US")
+    return {
+        "symbol": symbol,
+        "display_name": display_name,
+        # Legacy action/role/state/plan_relation are free text.  They cannot
+        # prove either direction or instrument, so the only safe downgrade is
+        # a neutral side and a pending relationship.
+        "side": "other",
+        "trade_type": "unknown",
+        "option_right": None,
+        "plan_status": "unknown",
+        "plan_status_note": "旧成交记录缺少结构化工具或事前计划证据，暂不能判断。",
+        "execution_count": row.get("execution_count"),
+        "data_status": row["data_status"],
+    }
 
 
 def _float_decimal(value: Any, path: str) -> float:
@@ -1740,16 +1827,19 @@ def _module_status(status: str, note: str = "") -> str:
 def _format_number(value: Optional[float], decimals: int = 2) -> str:
     if value is None:
         return "不可用"
-    if decimals == 0:
-        return f"{value:,.0f}"
-    return f"{value:,.{decimals}f}"
+    try:
+        quantizer = Decimal(1).scaleb(-decimals)
+        rounded = Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError) as exc:
+        raise DashboardRenderError("number cannot be rendered") from exc
+    return f"{rounded:,.{decimals}f}"
 
 
 def _format_pct(value: Optional[float]) -> str:
     if value is None:
         return "不可用"
     sign = "+" if value > 0 else "−" if value < 0 else ""
-    return f"{sign}{abs(value):.2f}%"
+    return f"{sign}{_format_number(abs(value))}%"
 
 
 def _direction_class(direction: str) -> str:
@@ -1939,12 +2029,7 @@ def _render_operations(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] 
     filled_items = [row for row in us_items if (row.get("execution_count") or 0) > 0 and row["data_status"] not in {"empty", "blocked"}]
     confirmed_total = scoped and executions["data_status"] in {"complete", "empty"} and executions["count"] is not None
     if filled_items:
-        items = "".join(
-            f'<li><strong>{_ui(row["action"])} · {_ui(row["display_name"])}</strong>'
-            f'<span>{_ui(row["role"], "")} · {_ui(row["state"], "待核对")} · '
-            f'{_ui(row["plan_relation"], "执行是否符合计划待核对")}</span></li>'
-            for row in filled_items
-        )
+        items = "".join(_render_operation_item(row) for row in filled_items)
         if confirmed_total and sum(row["execution_count"] for row in filled_items) < executions["count"]:
             items += '<li class="v2-empty-inline">另有成交明细尚待核对。</li>'
     elif confirmed_total and executions["count"] == 0:
@@ -1965,6 +2050,32 @@ def _render_operations(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] 
         <ul class="v2-operations-list">{items}</ul>
       </section>
     """
+
+
+def _render_operation_item(row: Mapping[str, Any]) -> str:
+    item = _normalize_display_operation(row)
+    side = {"buy": "买入", "sell": "卖出", "other": "成交"}[item["side"]]
+    trade_type = {
+        "stock": "正股",
+        "single_stock_leveraged_etf": "单股杠杆 ETF",
+        "long_call": "Long Call",
+        "zero_dte_option": "0DTE",
+        "other_option": "其他期权",
+        "unknown": "工具待确认",
+    }[item["trade_type"]]
+    if item["option_right"] is not None and item["trade_type"] != "long_call":
+        trade_type += " Call" if item["option_right"] == "call" else " Put"
+    plan_status = {
+        "confirmed_plan": "已确认计划",
+        "mismatch": "与计划不一致",
+        "outside_plan": "计划外",
+        "unknown": "待确认",
+    }[item["plan_status"]]
+    return (
+        f'<li><strong>{_escape(side)} · {_ui(item["display_name"])}</strong>'
+        f'<span>{_escape(trade_type)} · {_escape(plan_status)}</span>'
+        f'<small>来源：{_ui(item["plan_status_note"], "计划关系待核对")}</small></li>'
+    )
 
 
 def _render_plan_detail(detail: Optional[Mapping[str, Any]]) -> str:

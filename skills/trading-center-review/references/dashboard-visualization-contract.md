@@ -197,18 +197,23 @@ Codex 判断必须和确定性事实分开；条件式检查不能变成无条�
 
 orders 和 executions 各包含 count、data_status、note。count 可以为 null，但不能在失败时伪造为 0。
 
-items 只保留标的级脱敏聚合，包含：
+items 只保留标的级脱敏聚合。新结构化行必须包含：
 
-- symbol
-- display_name
-- action
-- role
-- state
-- plan_relation
-- reconciliation
-- data_status
+- `symbol`：`.US` ticker 或不含合约身份的 `.US:OPTION` 投影。
+- `display_name`：由安全投影生成的短名称，不承载工具或计划结论。
+- `side`：`buy`、`sell` 或 `other`。
+- `trade_type`：`stock`、`single_stock_leveraged_etf`、`long_call`、`zero_dte_option`、`other_option` 或 `unknown`。
+- `option_right`：`call`、`put` 或 `null`。
+- `plan_status`：`confirmed_plan`、`mismatch`、`outside_plan` 或 `unknown`。
+- `plan_status_note`：面向用户的有限、脱敏关系说明与证据来源。
+- `execution_count`：非负整数或 `null`。
+- `data_status`。
 
-每行另可提供 `execution_count`（非负整数或 null）：大于零才有资格进入成交展示；缺失或 null 不得从 action/state 文案反推成交，零值委托不展示。已知行成交总数不能超过已核验总数。`market_scope=US` 表示聚合已经按美股范围核验；未知范围不当作美股统计。
+结构化行不得再携带旧的 `action`、`role`、`state`、`plan_relation` 自由文案。旧发布仍可被读取，但只能由展示边界降级为 `side=other`、`trade_type=unknown`、`option_right=null`、`plan_status=unknown`，并从安全 symbol 生成名称；不得从旧文案推断 Long Call 或计划关系。
+
+`long_call` 只有在期权右侧、实际工具和成交前已确认且已生效的精确计划同时一致时才可写入；脱敏 `:OPTION` 本身不能证明 Long Call。0DTE 只由私有原始执行时刻与到期编码在内存中机械判定，输出仍只能保留 `:OPTION`、右侧和 0DTE 类型。相同 underlying 的不同工具不能共享计划覆盖；方向或管理阶段、确认/生效时间、工具上下文不足时为 `unknown`，存在同标的但工具/方向/阶段不一致的已生效计划时为 `mismatch`，明确没有匹配的事前计划才为 `outside_plan`。
+
+每行 `execution_count` 大于零才有资格进入成交展示；缺失或 null 不得从旧文案反推成交，零值委托不展示。已知行成交总数不能超过已核验总数。`market_scope=US` 表示聚合已经按美股范围核验；未知范围不当作美股统计。
 
 只有已核验美股成交总数为零时才显示“上一交易日无已成交记录”；总数非零但缺少逐项证明时显示“成交明细尚待核对”，不伪装为零。订单/成交计数为 `data_status=empty` 时，count 只能是 0 或 null；标的级 item 的空状态只能保留标识字段和中性占位，不得带事实文本或非空数值。订单计数留在私有包，不进入成交 UI。
 

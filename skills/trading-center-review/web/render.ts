@@ -14,8 +14,24 @@ const ui = (value: unknown, fallback = '待核对') => {
   return escape(diagnostic.test(text) || nonUS.test(text) ? fallback : text.replace(/(?<=[A-Za-z0-9])\.US\b/gi, ''));
 };
 const badge = (s: Status) => `<span class="v2-status-badge v2-status-${escape(s)}">${escape(labels[s])}</span>`;
-const number = (n: number | null) => n === null ? '不可用' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const pct = (n: number | null) => n === null ? '不可用' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(2)}%`;
+function number(value: number | string | null, decimals = 2): string {
+  if (value === null) return '不可用';
+  const match = String(value).match(/^(-?)(\d+)(?:\.(\d+))?$/);
+  if (!match) throw new Error('invalid_display_number');
+  const sign = match[1] === '-' ? '-' : '';
+  const scale = 10n ** BigInt(decimals);
+  const fraction = (match[3] ?? '').padEnd(decimals + 1, '0');
+  let units = BigInt(match[2]!) * scale + BigInt(fraction.slice(0, decimals) || '0');
+  if (fraction[decimals]! >= '5') units += 1n;
+  const whole = (units / scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const remainder = (units % scale).toString().padStart(decimals, '0');
+  return `${sign}${whole}.${remainder}`;
+}
+const pct = (n: number | null) => {
+  if (n === null) return '不可用';
+  const sign = n > 0 ? '+' : n < 0 ? '−' : '';
+  return `${sign}${number(String(Math.abs(n)))}%`;
+};
 const rfc = (s: string) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(s) && Number.isFinite(Date.parse(s));
 
 export function localParts(instant: Date, zone: string): { date: string; time: string } {
@@ -93,7 +109,13 @@ function operations(d: Daily): string {
   const us = o.items.filter(r => isUS(r.symbol));
   const filled = us.filter(r => (r.execution_count ?? 0) > 0 && !['empty', 'blocked'].includes(r.data_status));
   const confirmed = o.market_scope === 'US' && us.length === o.items.length && ['complete', 'empty'].includes(e.data_status) && e.count !== null;
-  let rows = filled.map(r => `<li><strong>${ui(r.action)} · ${ui(r.display_name)}</strong><span>${ui(r.role, '')} · ${ui(r.state, '待核对')} · ${ui(r.plan_relation, '执行是否符合计划待核对')}</span></li>`).join('');
+  const side = { buy: '买入', sell: '卖出', other: '成交' } as const;
+  const tradeType = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', long_call: 'Long Call', zero_dte_option: '0DTE', other_option: '其他期权', unknown: '工具待确认' } as const;
+  const planStatus = { confirmed_plan: '已确认计划', mismatch: '与计划不一致', outside_plan: '计划外', unknown: '待确认' } as const;
+  let rows = filled.map(r => {
+    const right = r.option_right === null || r.trade_type === 'long_call' ? '' : r.option_right === 'call' ? ' Call' : ' Put';
+    return `<li><strong>${side[r.side]} · ${ui(r.display_name)}</strong><span>${tradeType[r.trade_type]}${right} · ${planStatus[r.plan_status]}</span><small>来源：${ui(r.plan_status_note, '计划关系待核对')}</small></li>`;
+  }).join('');
   if (filled.length && confirmed && filled.reduce((n, r) => n + r.execution_count!, 0) < e.count!) rows += '<li class="v2-empty-inline">另有成交明细尚待核对。</li>';
   if (!rows) rows = confirmed && e.count === 0 ? '<li class="v2-empty-inline">上一交易日无已成交记录。</li>' : '<li class="v2-empty-inline">成交明细尚待核对。</li>';
   return `<section class="v2-operations" aria-labelledby="operations-heading"><div class="v2-section-title"><h1 id="operations-heading">上一交易日成交</h1><span class="v2-section-note">只看实际成交 · 对照事前计划</span></div><div class="v2-operation-meta"><span>${escape(d.meta.review_date)} · 纽约交易日</span>${e.data_status === 'stale' ? '<span>成交记录较旧，请重新核对。</span>' : ''}</div><ul class="v2-operations-list">${rows}</ul></section>`;
@@ -103,7 +125,7 @@ function planDetail(d: PlanDetail | null | undefined): string {
   const setup = { pullback: '趋势回调', breakout: '突破确认', range: '区间交易', bottom_reversal: '抄底反转（右侧确认）', position_management: '买入后仓位管理' };
   const zones = { observation: '观察区间', entry: '建仓区间', add: '加仓区间', reduce: '减仓区间', exit: '退出区间', invalidation: '失效区间' };
   const quotes = { below: '报价低于区间', inside: '报价位于区间', above: '报价高于区间', stale: '报价陈旧，区间保持不变', unavailable: '报价不可用，区间保持不变' };
-  const zoneRows = d.zones.map(z => `<div class="v2-plan-zone" data-zone-kind="${z.kind}"><strong>${zones[z.kind]}${z.kind === 'add' && d.plan_status !== 'confirmed' ? ' · 待单独确认' : ''}</strong><span>${escape(number(Number(z.low)))}–${escape(number(Number(z.high)))} ${escape(z.currency)}</span><small>${ui(z.condition, '条件待确认')}</small></div>`).join('');
+  const zoneRows = d.zones.map(z => `<div class="v2-plan-zone" data-zone-kind="${z.kind}"><strong>${zones[z.kind]}${z.kind === 'add' && d.plan_status !== 'confirmed' ? ' · 待单独确认' : ''}</strong><span>${escape(number(z.low))}–${escape(number(z.high))} ${escape(z.currency)}</span><small>${ui(z.condition, '条件待确认')}</small></div>`).join('');
   const action = d.plan_stage === 'pre_entry' ? 'entry' : 'add';
   const readiness = !d.zones.some(z => z.kind === action) ? '仅观察：确认条件未齐，暂无可执行区间。' : d.plan_status !== 'confirmed' ? '区间仅为草案；该版本经你确认后才生效。' : '仅在该版本的全部条件满足时有效，不是无条件买卖指令。';
   return `<div class="v2-plan-detail"><div class="v2-plan-detail-header"><strong>${setup[d.setup_type]}</strong><span class="v2-status-badge v2-status-${{ draft: 'partial', confirmed: 'complete', expired: 'stale' }[d.plan_status]}">${{ draft: '待确认草案', confirmed: '已确认计划', expired: '已到期' }[d.plan_status]}</span><small>${quotes[d.quote_relation]}</small></div><small class="v2-plan-evidence">技术参考：${escape(d.evidence.as_of)} 收盘 · EMA20/50/200 · ATR14 ${escape(d.evidence.atr14)}</small><div class="v2-plan-zones">${zoneRows}</div><small class="v2-plan-evidence">${readiness}</small></div>`;
@@ -139,9 +161,9 @@ function planRow(r: Position, verified: boolean): string {
 function valuation(r: Position): string {
   const v = r.valuation;
   if (!v) return '';
-  const label = { available: v.pr === null ? '待补充' : number(Number(v.pr)), unavailable: '待补充', not_applicable: '不适用', stale: '数据较旧' }[v.status];
-  const pe = v.pe_ttm === null ? '' : `<span>PE(TTM) <b>${number(Number(v.pe_ttm))}</b></span>`;
-  const roe = v.roe_pct === null ? '' : `<span>ROE <b>${number(Number(v.roe_pct))}%</b> · ${escape(v.roe_period_label)}</span>`;
+  const label = { available: v.pr === null ? '待补充' : number(v.pr), unavailable: '待补充', not_applicable: '不适用', stale: '数据较旧' }[v.status];
+  const pe = v.pe_ttm === null ? '' : `<span>PE(TTM) <b>${number(v.pe_ttm)}</b></span>`;
+  const roe = v.roe_pct === null ? '' : `<span>ROE <b>${number(v.roe_pct)}%</b> · ${escape(v.roe_period_label)}</span>`;
   const end = v.roe_period_end ? `年度截至 ${escape(v.roe_period_end)} · ` : '';
   const gap = v.gap ? `<span class="v2-valuation-gap">${ui(v.gap, '估值证据待补充')}</span>` : '';
   return `<div class="v2-valuation" data-valuation-status="${v.status}"><strong>市赚率 <b>${escape(label)}</b></strong>${pe}${roe}${gap}<small>${end}读取 ${escape(timeLabel(v.as_of))}</small></div>`;

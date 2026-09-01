@@ -39,6 +39,8 @@ HTTP 服务只读取完整发布，只绑定 `127.0.0.1:8765`。`/` 为最近成
 
 收盘市场环境刷新先在私有运行区执行 `refresh_market_close_environment.py --display-input <当前合格展示快照> --output <新展示快照>`，再把新文件交给 `publish --display-input`。刷新脚本只读固定六个公开代理的完成日线，并在六项齐备时调用一次已批准的 LongbridgeAI 收盘分析；浏览器刷新、HTTP 服务和 publish 本身都不读取行情或调用分析。命令失败时不生成新快照，当前成功页面保持不变。
 
+上一交易日成交卡的结构化刷新使用 `refresh_daily_operations.py --display-input <当前合格展示快照> --raw-executions <owner-only 成交工件> --output <新的 owner-only 展示快照>`。该 helper 只读既有成交工件和 SQLite v5 的确认计划，上游到期编码/执行时间只在进程内机械判断 0DTE；它不调用 Longbridge、不写数据库。输出只含安全交易类型、右侧、`confirmed_plan|mismatch|outside_plan|unknown` 计划状态、状态来源说明与聚合成交数，旧自由文案降级为 `unknown`，具体期权身份、价格、数量、上游 ID、成本和佣金不进入输出。只有新快照通过独立展示 Schema 和隐私校验后，才可交给 `publish --display-input`；失败或总数/日期/结构不一致时保持旧成功发布。
+
 带 `events.reference_at` 的双周合并日历还必须分别声明宏观、联储讲话和持仓相关财报覆盖。已有合并日历存在时，新发布不得移除核对时点、倒退核对时间或静默丢失新 14 日窗口内的既有事件；正式取消应保留同一事件并更新状态。门禁失败时当前页面保持不变，由生成端重新核对完整窗口后再发布，不从旧页面自动拼接并冒充本次新核对。
 
 限定标的估值已经写入 SQLite 时，可在现有发布上运行 `publish --enrich-db --route /new-immutable-route/`。该入口只给当前持仓/未持有买入候选附着最新白名单估值；内容确有变化才更新内容生成时间，行情截止和周度生成时间保持原值。它不读取原始响应、不补候选、不推断工具/周期，也不确认计划。
