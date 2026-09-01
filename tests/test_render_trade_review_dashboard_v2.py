@@ -980,6 +980,12 @@ class DashboardV2RendererTests(unittest.TestCase):
         with self.assertRaises(MODULE.DashboardRenderError):
             MODULE.validate_weekly_packet(sensitive)
 
+    def test_daily_visible_text_rejects_compact_option_identity(self):
+        packet = fixture("complete")
+        packet["codex_analysis"]["headline"] = "观察 DEMO260101C00100000.US"
+        with self.assertRaisesRegex(MODULE.DashboardRenderError, "option contract identity"):
+            MODULE.validate_packet(packet)
+
     def test_weekly_blocked_metrics_are_unavailable_not_zero_percent(self):
         rendered = MODULE.render_weekly_dashboard(
             weekly_packet(), TEMPLATE_PATH.read_text(encoding="utf-8"),

@@ -63,7 +63,7 @@ def fingerprint(path: Path, *, standalone_backup: bool = False):
 
 
 def verify(before, after):
-    if after["schema_version"] != 3 or after["quick_check"] != ["ok"] or after["foreign_key_error_count"]:
+    if after["schema_version"] != state.SCHEMA_VERSION or after["quick_check"] != ["ok"] or after["foreign_key_error_count"]:
         raise state.StateContractError("migrated database integrity check failed")
     if before["created_at"] != after["created_at"] or after["mode"] != "0o600":
         raise state.StateContractError("migration changed creation history or permissions")
@@ -82,11 +82,11 @@ def main():
     path = state.validate_state_db_path(args.state_db)
     output = runner._private_path(args.output, "output")
     before = fingerprint(path)
-    if before["schema_version"] not in {1, 2, 3} or before["quick_check"] != ["ok"] or before["foreign_key_error_count"]:
+    if before["schema_version"] not in range(1, state.SCHEMA_VERSION + 1) or before["quick_check"] != ["ok"] or before["foreign_key_error_count"]:
         raise state.StateContractError("source database is not a healthy supported state")
     backups = []
     if args.mode == "rehearse":
-        with tempfile.TemporaryDirectory(prefix="trading-v3-rehearsal-") as directory:
+        with tempfile.TemporaryDirectory(prefix="trading-state-rehearsal-") as directory:
             root = Path(directory)
             root.chmod(0o700)
             copy_path = root / "review.sqlite3"

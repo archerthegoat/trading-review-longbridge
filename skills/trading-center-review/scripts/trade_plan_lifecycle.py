@@ -30,10 +30,15 @@ def project_draft(value: Any) -> Dict[str, Any]:
         "parent_plan_id", "parent_plan_version", "initial_buy_episode_key",
         "constraints", "source", "evidence_id", "evidence", "zones",
         "conditions", "gaps", "boundary", "content_hash",
+        "execution_context",
     }
-    draft = constructor._strict_object(value, keys, keys, "$draft")
-    if draft["schema_version"] != constructor.DRAFT_SCHEMA or draft["plan_status"] != "draft":
+    required = keys - {"execution_context"}
+    draft = constructor._strict_object(value, keys, required, "$draft")
+    if draft["schema_version"] not in {constructor.DRAFT_SCHEMA, constructor.DRAFT_SCHEMA_V2} or draft["plan_status"] != "draft":
         raise state.StateContractError("only a constructed draft can be saved")
+    contextual = draft["schema_version"] == constructor.DRAFT_SCHEMA_V2
+    if contextual != ("execution_context" in draft):
+        raise state.StateContractError("execution context requires draft v2")
     if draft["data_status"] not in {"complete", "partial"}:
         raise state.StateContractError("blocked technical evidence cannot be persisted as a plan")
     expected_readiness = "ready_for_confirmation" if draft["data_status"] == "complete" else "observation_only"
@@ -43,6 +48,8 @@ def project_draft(value: Any) -> Dict[str, Any]:
     if constructor._hash(content) != draft["content_hash"]:
         raise state.StateContractError("draft content hash mismatch")
     source_keys = {"provider", "capability", "period", "timezone", "adjustment", "requested_start", "requested_end", "as_of"}
+    if contextual:
+        source_keys.add("symbol")
     source = constructor._strict_object(draft["source"], source_keys, source_keys, "$draft.source")
     if (source["provider"], source["capability"], source["period"]) != ("Longbridge", "kline history", "1D"):
         raise state.StateContractError("plan evidence must come from Longbridge completed daily bars")
@@ -65,7 +72,7 @@ def project_draft(value: Any) -> Dict[str, Any]:
         if evidence["bottom_reversal_confirmed"] is not True or evidence["bottom_context_present"] is not True:
             raise state.StateContractError("bottom entry requires both context and right-side confirmation")
     projection = {
-        "schema_version": "trading-plan-state.v1",
+        "schema_version": "trading-plan-state.v2" if contextual else "trading-plan-state.v1",
         "plan_id": draft["plan_id"], "version": draft["version"],
         "underlying": draft["symbol"], "direction": draft["direction"],
         "plan_stage": draft["plan_stage"], "setup_type": draft["setup_type"],
@@ -85,6 +92,9 @@ def project_draft(value: Any) -> Dict[str, Any]:
         "initial_buy_episode_key": draft["initial_buy_episode_key"],
         "data_status": draft["data_status"], "zones": zones,
     }
+    if contextual:
+        projection["execution_context"] = copy.deepcopy(draft["execution_context"])
+        projection["evidence"].update(symbol=source["symbol"], period=source["period"])
     state.normalize_plan_version(projection)
     return projection
 
@@ -117,7 +127,10 @@ def dashboard_detail(plan: Mapping[str, Any], *, as_of: str, quote: Optional[Map
     fields = {
         "plan_id", "version", "plan_stage", "plan_status", "setup_type",
         "evidence", "zones", "parent_plan_id", "parent_plan_version", "initial_buy_episode_key",
+        "underlying",
     }
+    if "execution_context" in plan:
+        fields.add("execution_context")
     detail = {key: copy.deepcopy(plan[key]) for key in fields}
     expiry = dt.datetime.fromisoformat(plan["expires_at"].replace("Z", "+00:00"))
     if now >= expiry:
@@ -125,9 +138,13 @@ def dashboard_detail(plan: Mapping[str, Any], *, as_of: str, quote: Optional[Map
     relation = "unavailable"
     if quote is not None:
         quote_keys = {"source", "price", "as_of", "data_status"}
+        if "execution_context" in plan:
+            quote_keys.add("symbol")
         item = constructor._strict_object(dict(quote), quote_keys, quote_keys, "$quote")
         if item["source"] != "Longbridge":
             raise state.StateContractError("quote relation is Longbridge-only")
+        if "execution_context" in plan and item["symbol"] != plan["execution_context"]["observation_symbol"]:
+            raise state.StateContractError("quote must match the plan observation asset")
         status = state._status(item["data_status"], "$quote.data_status")
         quote_at = dt.datetime.fromisoformat(state._timestamp(item["as_of"], "$quote.as_of").replace("Z", "+00:00"))
         if quote_at > now:
@@ -152,11 +169,21 @@ def dashboard_detail(plan: Mapping[str, Any], *, as_of: str, quote: Optional[Map
 def enrich_daily(packet: Any, plan: Mapping[str, Any], quote: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     daily = copy.deepcopy(dashboard.validate_packet(packet))
     detail = dashboard_detail(plan, as_of=daily["meta"]["generated_at"], quote=quote)
-    matches = [row for row in daily["positions_plans"]["items"] if row["symbol"] == plan["underlying"]]
+    context = plan.get("execution_context")
+    matches = [row for row in daily["positions_plans"]["items"] if (
+        (context is None and row["symbol"] == plan["underlying"])
+        or (context is not None and row["symbol"] == context["trade_symbol"]
+            and row.get("instrument") is not None
+            and state.instruments.matches(
+                context, row["symbol"], row["instrument"], underlying=plan["underlying"]
+            ))
+    )]
     if not matches:
         raise state.StateContractError("plan underlying must already exist in the daily plan table")
     for row in matches:
         row["plan_detail"] = detail
+        if context is not None:
+            row["execution_context"] = copy.deepcopy(context)
         row["plan_coverage"] = "已确认计划" if detail["plan_status"] == "confirmed" else "已到期，需重新确认" if detail["plan_status"] == "expired" else "待确认草案，不计入覆盖率"
         if detail["plan_status"] != "confirmed":
             row["has_gap"] = True

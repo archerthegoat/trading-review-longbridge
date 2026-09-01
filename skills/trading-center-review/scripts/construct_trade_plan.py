@@ -22,9 +22,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
+import trading_review_instruments as instruments
+
 
 REQUEST_SCHEMA = "trading-plan-request.v1"
 DRAFT_SCHEMA = "trading-plan-draft.v1"
+REQUEST_SCHEMA_V2 = "trading-plan-request.v2"
+DRAFT_SCHEMA_V2 = "trading-plan-draft.v2"
 PRIVATE_ROOT = Path("/private/tmp/trading-center-review-runtime").resolve()
 NY_TZ = ZoneInfo("America/New_York")
 MINIMUM_BARS = 319
@@ -64,6 +68,8 @@ def _strict_object(
 def _text(value: Any, path: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise PlanConstructionError("schema", f"{path} must be non-empty text")
+    if instruments.contains_contract_identity(value):
+        raise PlanConstructionError("privacy", f"{path} contains option contract identity")
     return value.strip()
 
 
@@ -284,9 +290,12 @@ def _normalize_request(value: Any) -> Dict[str, Any]:
         "parent_plan_version",
         "initial_buy_episode_key",
     }
-    root = _strict_object(value, keys, keys, "$")
-    if root["schema_version"] != REQUEST_SCHEMA:
+    root = _strict_object(value, keys | {"execution_context"}, keys, "$")
+    if root["schema_version"] not in {REQUEST_SCHEMA, REQUEST_SCHEMA_V2}:
         raise PlanConstructionError("schema", "unsupported request schema")
+    contextual = root["schema_version"] == REQUEST_SCHEMA_V2
+    if contextual != ("execution_context" in root):
+        raise PlanConstructionError("schema", "execution context requires request v2")
     setup = _text(root["setup_type"], "$.setup_type")
     stage = _text(root["plan_stage"], "$.plan_stage")
     if setup not in SETUPS:
@@ -311,6 +320,8 @@ def _normalize_request(value: Any) -> Dict[str, Any]:
         _text(root["initial_buy_episode_key"], "$.initial_buy_episode_key")
 
     source_keys = {"provider", "capability", "period", "timezone", "adjustment", "requested_start", "requested_end", "as_of"}
+    if contextual:
+        source_keys.add("symbol")
     source = _strict_object(root["source"], source_keys, source_keys, "$.source")
     if _text(source["provider"], "$.source.provider") != "Longbridge":
         raise PlanConstructionError("provider", "plan construction is Longbridge-only")
@@ -398,7 +409,13 @@ def _normalize_request(value: Any) -> Dict[str, Any]:
     symbol = _text(root["symbol"], "$.symbol").upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,20}\.US", symbol) or re.search(r"\d{6}[CP]\d", symbol):
         raise PlanConstructionError("scope", "plan symbol must be a US underlying, not an option contract")
-    return {
+    try:
+        context = instruments.normalize_context(root["execution_context"], underlying=symbol) if contextual else None
+        if contextual:
+            instruments.validate_daily_evidence(context, symbol=source["symbol"], period=source["period"])
+    except instruments.InstrumentContractError as exc:
+        raise PlanConstructionError("execution_context", str(exc)) from exc
+    result = {
         "generated_at": generated_at.isoformat(),
         "expires_at": expires_at.isoformat(),
         "plan_id": _text(root["plan_id"], "$.plan_id"),
@@ -429,6 +446,13 @@ def _normalize_request(value: Any) -> Dict[str, Any]:
         "parent_plan_version": root["parent_plan_version"],
         "initial_buy_episode_key": root["initial_buy_episode_key"],
     }
+    if contextual:
+        # The evidence was validated against the observation asset above.  A
+        # leveraged-ETF plan may intentionally observe the traded ETF rather
+        # than the company underlying, so retain that exact validated symbol.
+        result["source"]["symbol"] = source["symbol"]
+        result["execution_context"] = context
+    return result
 
 
 def _blocked_packet(value: Any, error: PlanConstructionError) -> Dict[str, Any]:
@@ -436,7 +460,7 @@ def _blocked_packet(value: Any, error: PlanConstructionError) -> Dict[str, Any]:
     if not isinstance(source, dict):
         source = {}
     return {
-        "schema_version": DRAFT_SCHEMA,
+        "schema_version": DRAFT_SCHEMA_V2 if isinstance(value, dict) and "execution_context" in value else DRAFT_SCHEMA,
         "data_status": "blocked",
         "plan_status": "draft",
         "plan_readiness": "blocked",
@@ -708,7 +732,7 @@ def _construct_plan(value: Any) -> Dict[str, Any]:
             }
         )
     result: Dict[str, Any] = {
-        "schema_version": DRAFT_SCHEMA,
+        "schema_version": DRAFT_SCHEMA_V2 if "execution_context" in request else DRAFT_SCHEMA,
         "data_status": "complete" if actionable else "partial",
         "plan_status": "draft",
         "plan_readiness": "ready_for_confirmation" if actionable else "observation_only",
@@ -753,6 +777,12 @@ def _construct_plan(value: Any) -> Dict[str, Any]:
         "gaps": gaps,
         "boundary": "条件式计划草案；不构成下单或无条件买卖指令。区间只基于已完成 Longbridge 日线。",
     }
+    if "execution_context" in request:
+        result["execution_context"] = request["execution_context"]
+        if request["execution_context"]["trigger_basis"] == "unconfirmed":
+            result["data_status"] = "partial"
+            result["plan_readiness"] = "observation_only"
+            result["gaps"].append("触发方式待确认；当前草案不能确认执行")
     result["content_hash"] = _hash(result)
     return result
 
@@ -826,7 +856,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         json.dumps(
             {
                 "status": result["data_status"],
-                "schema_version": DRAFT_SCHEMA,
+                "schema_version": result["schema_version"],
                 "plan_readiness": result["plan_readiness"],
                 "output": str(output_path),
             },

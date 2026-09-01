@@ -214,6 +214,30 @@ class WeeklyProjectorTests(unittest.TestCase):
         self.assertEqual(modules["positions"], "empty")
         self.assertEqual(result["execution_metrics"]["data_status"], "blocked")
 
+    def test_explicit_instrument_execution_basis_survives_an_empty_week(self):
+        facts = private_facts()
+        facts["schema_version"] = PROJECT.PRIVATE_FACTS_SCHEMA
+        for key in ("account_current", "profit_analysis", "profit_analysis_by_market", "cash_flow"):
+            facts.pop(key)
+        facts["trades"]["status"] = "empty"
+        facts["trades"]["daily"][0].update(
+            status="empty", rows=[], order_count=0, execution_count=0
+        )
+        facts["plan"].update(
+            status="complete", reason="本周没有适用的交易",
+            execution_basis="instrument-episode.v1", plan_hash="a" * 64,
+            metrics_status="empty",
+        )
+        projected = PROJECT.project_weekly_state(facts, None)
+        self.assertEqual(projected["schema_version"], PROJECT.STATE_SCHEMA_V3)
+        self.assertEqual(projected["episode_assessments"], [])
+        self.assertEqual(projected["execution_metrics"]["data_status"], "empty")
+
+        missing_marker = private_facts()
+        missing_marker["plan"]["episode_assessments"] = [{"trade_symbol": "DEMO.US"}]
+        with self.assertRaisesRegex(PROJECT.WeeklyProjectionError, "explicit execution_basis"):
+            PROJECT.project_weekly_state(missing_marker, None)
+
     def test_v2_private_input_excludes_account_and_pnl_modules(self):
         facts = private_facts()
         facts["schema_version"] = PROJECT.PRIVATE_FACTS_SCHEMA

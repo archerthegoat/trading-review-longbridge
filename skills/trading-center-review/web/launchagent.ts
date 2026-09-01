@@ -18,7 +18,12 @@ export const PACKAGE_FILES = [
   'web/service.ts', 'web/launchagent.ts', 'web/cli.ts', 'web/package.json',
   'scripts/trading_review_display.py', 'scripts/render_trade_review_dashboard_v2.py',
   'scripts/trading_review_state.py', 'assets/trade-review-dashboard-v2-standalone.html',
+  'scripts/trading_review_valuation.py', 'scripts/trading_review_instruments.py', 'scripts/trading_review_portfolio.py',
 ] as const;
+// Admit only the exact previous bundle shape for a verified in-place upgrade.
+const PRE_PORTFOLIO_ENRICH_PACKAGE_FILES = PACKAGE_FILES.filter(name => name !== 'scripts/trading_review_portfolio.py');
+const PRE_INSTRUMENT_PACKAGE_FILES = PRE_PORTFOLIO_ENRICH_PACKAGE_FILES.filter(name => name !== 'scripts/trading_review_instruments.py');
+const LEGACY_PACKAGE_FILES = PRE_INSTRUMENT_PACKAGE_FILES.filter(name => name !== 'scripts/trading_review_valuation.py');
 interface Installation { schema_version: 'trading-review-ts-installation.v1'; code_id: string; files: Record<string, string>; node: string; node_version: string; architecture: string }
 const domain = () => `gui/${process.getuid!()}`;
 function launchctl(args: string[], check = true) {
@@ -39,8 +44,9 @@ export function packageSource() {
 }
 export function verifyInstallation(store: PublicationStore): Installation {
   const info = object(parseJson(store.read('installation.json')), ['schema_version', 'code_id', 'files', 'node', 'node_version', 'architecture']) as unknown as Installation;
-  if (info.schema_version !== 'trading-review-ts-installation.v1' || !HASH.test(info.code_id) || !info.files || Object.keys(info.files).sort().join('|') !== [...PACKAGE_FILES].sort().join('|') || hash(jsonBytes(info.files)) !== info.code_id || !path.isAbsolute(info.node)) throw new Error('installation_manifest_invalid');
-  for (const name of PACKAGE_FILES) if (hash(store.read(`code/${info.code_id}/${name}`)) !== info.files[name]) throw new Error('installed_code_integrity_failed');
+  const shape = Object.keys(info.files ?? {}).sort().join('|');
+  if (info.schema_version !== 'trading-review-ts-installation.v1' || !HASH.test(info.code_id) || !info.files || ![PACKAGE_FILES, PRE_PORTFOLIO_ENRICH_PACKAGE_FILES, PRE_INSTRUMENT_PACKAGE_FILES, LEGACY_PACKAGE_FILES].some(files => shape === [...files].sort().join('|')) || hash(jsonBytes(info.files)) !== info.code_id || !path.isAbsolute(info.node)) throw new Error('installation_manifest_invalid');
+  for (const name of Object.keys(info.files)) if (hash(store.read(`code/${info.code_id}/${name}`)) !== info.files[name]) throw new Error('installed_code_integrity_failed');
   return info;
 }
 function config(store: PublicationStore, info: Installation) {

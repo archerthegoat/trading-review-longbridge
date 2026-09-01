@@ -21,8 +21,20 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence
 from zoneinfo import ZoneInfo
 
+try:
+    import trading_review_instruments as instruments
+except ModuleNotFoundError:  # direct importlib loading used by the migration verifier/tests
+    import importlib.util
+    _instrument_spec = importlib.util.spec_from_file_location(
+        "trading_review_instruments", Path(__file__).with_name("trading_review_instruments.py")
+    )
+    if _instrument_spec is None or _instrument_spec.loader is None:
+        raise
+    instruments = importlib.util.module_from_spec(_instrument_spec)
+    _instrument_spec.loader.exec_module(instruments)
 
-SCHEMA_VERSION = 3
+
+SCHEMA_VERSION = 5
 DEFAULT_STATE_DB = (
     Path.home()
     / "Library"
@@ -182,6 +194,25 @@ EXPECTED_COLUMNS = {
         "execution_rate", "plan_win_rate", "data_status", "gap",
     ),
 }
+
+V4_TABLES = ("daily_review_sources", "daily_review_source_dependencies", "journal_confirmation_bindings", "valuation_observations", "holding_management_intents")
+SCHEMA_TABLES += V4_TABLES
+EXPECTED_COLUMNS.update({
+    "daily_review_sources": ("review_key", "revision", "run_id", "period_start", "period_end", "source_contract_version", "analysis_contract_version", "facts_hash", "plan_hash", "facts_as_of", "generated_at", "data_status"),
+    "daily_review_source_dependencies": ("review_key", "review_revision", "dataset", "period_start", "period_end", "contract_version", "partition_revision", "payload_hash"),
+    "journal_confirmation_bindings": ("review_key", "confirmation_version", "review_type", "source_revision", "plan_hash", "facts_as_of", "generated_at", "data_status", "payload_hash"),
+    "valuation_observations": ("symbol", "instrument_type", "as_of", "pe_ttm", "roe_pct", "roe_period_end", "roe_period_label", "roe_basis", "roe_quality", "pr", "status", "gap", "source"),
+    "holding_management_intents": ("underlying", "version", "confirmed_at", "thesis", "holding_policy", "add_policy", "review_price", "possible_add_price", "trigger_basis", "execution_authorized", "content_hash", "supersedes_version"),
+})
+
+V5_TABLES = ("plan_execution_contexts", "trade_instrument_facts", "weekly_execution_bases", "instrument_episode_assessments")
+SCHEMA_TABLES += V5_TABLES
+EXPECTED_COLUMNS.update({
+    "plan_execution_contexts": ("plan_id", "plan_version", *instruments.CONTEXT_FIELDS, "evidence_symbol", "evidence_period"),
+    "trade_instrument_facts": ("dataset", "period_start", "period_end", "contract_version", "revision", "market_date", "symbol", "side", "underlying", "tool_kind"),
+    "weekly_execution_bases": ("review_key", "review_revision", "contract_version"),
+    "instrument_episode_assessments": ("review_key", "review_revision", "episode_index", "market_date", "trade_symbol", "underlying", "tool_kind", "side", "plan_id", "plan_version", "observation_timeframe", "trigger_timeframe", "trigger_basis", "coverage_status", "compliance_status", "outcome_status", "deviation_type", "reason", "next_rule", "data_status"),
+})
 
 SENSITIVE_KEY_RE = re.compile(
     r"(?:account[_ -]?(?:id|no|number|identifier)|"
@@ -728,6 +759,151 @@ CREATE TABLE weekly_execution_metrics (
 """
 
 
+SCHEMA_V4_SQL = """
+CREATE TABLE daily_review_sources (
+    review_key TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL CHECK (period_start = period_end),
+    source_contract_version TEXT NOT NULL,
+    analysis_contract_version TEXT NOT NULL,
+    facts_hash TEXT NOT NULL CHECK (length(facts_hash) = 64),
+    plan_hash TEXT NOT NULL CHECK (length(plan_hash) = 64),
+    facts_as_of TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    data_status TEXT NOT NULL CHECK (data_status IN ('complete','partial','empty','stale','blocked')),
+    PRIMARY KEY (review_key, revision)
+);
+CREATE TABLE daily_review_source_dependencies (
+    review_key TEXT NOT NULL,
+    review_revision INTEGER NOT NULL,
+    dataset TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    contract_version TEXT NOT NULL,
+    partition_revision INTEGER NOT NULL,
+    payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
+    PRIMARY KEY (review_key, review_revision, dataset, period_start, period_end, contract_version),
+    FOREIGN KEY (review_key, review_revision) REFERENCES daily_review_sources(review_key, revision),
+    FOREIGN KEY (dataset, period_start, period_end, contract_version, partition_revision)
+        REFERENCES partitions(dataset, period_start, period_end, contract_version, revision)
+);
+CREATE TABLE journal_confirmation_bindings (
+    review_key TEXT NOT NULL,
+    confirmation_version INTEGER NOT NULL,
+    review_type TEXT NOT NULL CHECK (review_type IN ('daily','weekly')),
+    source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+    plan_hash TEXT NOT NULL CHECK (length(plan_hash) = 64),
+    facts_as_of TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    data_status TEXT NOT NULL CHECK (data_status IN ('complete','partial','empty','stale')),
+    payload_hash TEXT NOT NULL UNIQUE CHECK (length(payload_hash) = 64),
+    PRIMARY KEY (review_key, confirmation_version),
+    FOREIGN KEY (review_key, confirmation_version) REFERENCES confirmations(review_key, confirmation_version)
+);
+CREATE TABLE valuation_observations (
+    symbol TEXT NOT NULL,
+    instrument_type TEXT NOT NULL CHECK (instrument_type IN ('company','fund')),
+    as_of TEXT NOT NULL,
+    pe_ttm TEXT,
+    roe_pct TEXT,
+    roe_period_end TEXT,
+    roe_period_label TEXT,
+    roe_basis TEXT CHECK (roe_basis = 'annual'),
+    roe_quality TEXT NOT NULL CHECK (roe_quality IN ('positive_income_equity','nonpositive','unverified','not_applicable')),
+    pr TEXT,
+    status TEXT NOT NULL CHECK (status IN ('available','unavailable','not_applicable','stale')),
+    gap TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source = 'Longbridge'),
+    PRIMARY KEY (symbol, as_of)
+);
+CREATE TABLE holding_management_intents (
+    underlying TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    confirmed_at TEXT NOT NULL,
+    thesis TEXT NOT NULL,
+    holding_policy TEXT NOT NULL,
+    add_policy TEXT NOT NULL,
+    review_price TEXT,
+    possible_add_price TEXT,
+    trigger_basis TEXT NOT NULL CHECK (trigger_basis = 'unconfirmed'),
+    execution_authorized INTEGER NOT NULL CHECK (execution_authorized = 0),
+    content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+    supersedes_version INTEGER,
+    PRIMARY KEY (underlying, version),
+    FOREIGN KEY (underlying, supersedes_version) REFERENCES holding_management_intents(underlying, version)
+);
+"""
+
+
+SCHEMA_V5_SQL = """
+CREATE TABLE plan_execution_contexts (
+    plan_id TEXT NOT NULL,
+    plan_version INTEGER NOT NULL,
+    tool_kind TEXT NOT NULL CHECK (tool_kind IN ('stock','single_stock_leveraged_etf','leap_call')),
+    trade_symbol TEXT NOT NULL,
+    observation_symbol TEXT,
+    observation_timeframe TEXT,
+    trigger_timeframe TEXT,
+    trigger_basis TEXT NOT NULL CHECK (trigger_basis IN ('bar_close','intrabar_touch','unconfirmed')),
+    exception_note TEXT,
+    evidence_symbol TEXT NOT NULL,
+    evidence_period TEXT NOT NULL CHECK (evidence_period = '1D'),
+    PRIMARY KEY (plan_id, plan_version),
+    FOREIGN KEY (plan_id, plan_version) REFERENCES plan_versions(plan_id, version)
+);
+CREATE TABLE trade_instrument_facts (
+    dataset TEXT NOT NULL CHECK (dataset = 'trades'),
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    contract_version TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    market_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    tool_kind TEXT NOT NULL CHECK (tool_kind IN ('stock','single_stock_leveraged_etf','leap_call','unknown')),
+    PRIMARY KEY (market_date, symbol, side, revision),
+    FOREIGN KEY (market_date, symbol, side, revision) REFERENCES trade_aggregates(market_date, symbol, side, revision),
+    FOREIGN KEY (dataset, period_start, period_end, contract_version, revision) REFERENCES partitions(dataset, period_start, period_end, contract_version, revision)
+);
+CREATE TABLE weekly_execution_bases (
+    review_key TEXT NOT NULL,
+    review_revision INTEGER NOT NULL,
+    contract_version TEXT NOT NULL CHECK (contract_version = 'instrument-episode.v1'),
+    PRIMARY KEY (review_key, review_revision),
+    FOREIGN KEY (review_key, review_revision) REFERENCES weekly_reviews(review_key, revision)
+);
+CREATE TABLE instrument_episode_assessments (
+    review_key TEXT NOT NULL,
+    review_revision INTEGER NOT NULL,
+    episode_index INTEGER NOT NULL CHECK (episode_index >= 0),
+    market_date TEXT NOT NULL,
+    trade_symbol TEXT NOT NULL,
+    underlying TEXT NOT NULL,
+    tool_kind TEXT NOT NULL CHECK (tool_kind IN ('stock','single_stock_leveraged_etf','leap_call','unknown')),
+    side TEXT NOT NULL CHECK (side IN ('buy','sell')),
+    plan_id TEXT,
+    plan_version INTEGER,
+    observation_timeframe TEXT,
+    trigger_timeframe TEXT,
+    trigger_basis TEXT NOT NULL CHECK (trigger_basis IN ('bar_close','intrabar_touch','unconfirmed')),
+    coverage_status TEXT NOT NULL CHECK (coverage_status IN ('covered','uncovered')),
+    compliance_status TEXT NOT NULL CHECK (compliance_status IN ('compliant','non_compliant','unassessable')),
+    outcome_status TEXT NOT NULL CHECK (outcome_status IN ('success','failure','open','flat','unverifiable')),
+    deviation_type TEXT,
+    reason TEXT NOT NULL,
+    next_rule TEXT NOT NULL,
+    data_status TEXT NOT NULL CHECK (data_status IN ('complete','partial','stale','blocked')),
+    PRIMARY KEY (review_key, review_revision, episode_index),
+    UNIQUE (review_key, review_revision, market_date, trade_symbol, side),
+    FOREIGN KEY (review_key, review_revision) REFERENCES weekly_execution_bases(review_key, review_revision),
+    FOREIGN KEY (plan_id, plan_version) REFERENCES plan_versions(plan_id, version)
+);
+"""
+
+
 def _apply_migration_v1(connection: sqlite3.Connection) -> None:
     # ``executescript`` performs an implicit COMMIT before running its script,
     # which would let a later DDL error leave a half-created schema behind.
@@ -767,6 +943,89 @@ def _apply_migration_v3(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_migration_v4(connection: sqlite3.Connection) -> None:
+    for statement in SCHEMA_V4_SQL.split(";"):
+        if statement.strip():
+            connection.execute(statement)
+    for table in V4_TABLES:
+        for operation in ("UPDATE", "DELETE"):
+            connection.execute(f"CREATE TRIGGER {table}_no_{operation.lower()} BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'immutable_review_evidence'); END")
+    connection.execute("UPDATE schema_meta SET schema_version=4, migrated_at=? WHERE singleton=1", (utc_now(),))
+
+
+IDENTITY_COLUMNS = (
+    ("position_snapshots", "symbol", True),
+    ("position_snapshots", "underlying", False),
+    ("trade_aggregates", "symbol", True),
+    ("weekly_attributions", "underlying", False),
+    ("trade_episode_assessments", "underlying", False),
+    ("plan_versions", "underlying", False),
+    ("valuation_observations", "symbol", False),
+    ("holding_management_intents", "underlying", False),
+    ("plan_execution_contexts", "trade_symbol", True),
+    ("plan_execution_contexts", "observation_symbol", False),
+    ("trade_instrument_facts", "symbol", True),
+    ("trade_instrument_facts", "underlying", False),
+    ("instrument_episode_assessments", "trade_symbol", True),
+    ("instrument_episode_assessments", "underlying", False),
+)
+
+
+def _validate_identity_privacy(connection: sqlite3.Connection) -> None:
+    """Reject stored concrete option identities; never rewrite legacy facts.
+
+    Structured identity columns are checked with their symbol grammar.  Every
+    TEXT column in the fixed schema is also scanned so a contract cannot hide
+    in plan prose, model output, exception notes, or another display string.
+    """
+
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+    for table, column, allow_option_projection in IDENTITY_COLUMNS:
+        if table not in tables:
+            continue
+        for row in connection.execute(
+            f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"
+        ):
+            try:
+                instruments.safe_symbol(row[0], option=allow_option_projection)
+            except instruments.InstrumentContractError as exc:
+                raise StateMigrationError(
+                    f"stored {table}.{column} violates the option-identity privacy boundary"
+                ) from exc
+    for table in sorted(tables.intersection(SCHEMA_TABLES)):
+        text_columns = [
+            row[1]
+            for row in connection.execute(f'PRAGMA table_info("{table}")')
+            if "TEXT" in str(row[2]).upper()
+        ]
+        if not text_columns:
+            continue
+        projection = ", ".join(f'"{column}"' for column in text_columns)
+        for row in connection.execute(f'SELECT {projection} FROM "{table}"'):
+            if any(instruments.contains_contract_identity(value) for value in row):
+                raise StateMigrationError(
+                    f"stored {table} text violates the option-identity privacy boundary"
+                )
+
+
+def _apply_migration_v5(connection: sqlite3.Connection) -> None:
+    # Audit before DDL/version changes. An unsafe legacy identity blocks the
+    # migration and is never guessed, projected, or rewritten.
+    _validate_identity_privacy(connection)
+    for statement in SCHEMA_V5_SQL.split(";"):
+        if statement.strip():
+            connection.execute(statement)
+    for table in V5_TABLES:
+        for operation in ("UPDATE", "DELETE"):
+            connection.execute(f"CREATE TRIGGER {table}_no_{operation.lower()} BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'immutable_instrument_evidence'); END")
+    connection.execute("UPDATE schema_meta SET schema_version=5, migrated_at=? WHERE singleton=1", (utc_now(),))
+
+
 def _chmod_sqlite_files(path: Path) -> None:
     for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
         if candidate.exists():
@@ -798,6 +1057,7 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
         raise StateMigrationError("SQLite quick_check failed")
     if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
         raise StateMigrationError("SQLite foreign_key_check failed")
+    _validate_identity_privacy(connection)
 
 
 @contextlib.contextmanager
@@ -876,6 +1136,12 @@ def open_state_store(
             if version == 2:
                 _apply_migration_v3(connection)
                 version = 3
+            if version == 3:
+                _apply_migration_v4(connection)
+                version = 4
+            if version == 4:
+                _apply_migration_v5(connection)
+                version = 5
             if version != SCHEMA_VERSION:
                 raise StateMigrationError(
                     f"database schema {version} cannot migrate to supported {SCHEMA_VERSION}"
@@ -919,6 +1185,8 @@ def _text(value: Any, path: str, *, allow_empty: bool = False) -> str:
         raise StateContractError(f"{path} must be a non-empty string")
     if SENSITIVE_VALUE_RE.search(value):
         raise StateContractError(f"{path} contains a forbidden sensitive value")
+    if instruments.contains_contract_identity(value):
+        raise StateContractError(f"{path} contains option contract identity")
     return value.strip()
 
 
@@ -1064,6 +1332,11 @@ def _status(value: Any, path: str) -> str:
 def _normalize_position(value: Any, path: str) -> Dict[str, Any]:
     keys = {"snapshot_at", "symbol", "underlying", "instrument_type", "quantity", "data_status"}
     item = _strict_object(value, keys, keys, path)
+    try:
+        instruments.safe_symbol(item["symbol"])
+        instruments.safe_symbol(item["underlying"], option=False)
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(str(exc)) from exc
     return {
         "snapshot_at": _timestamp(item["snapshot_at"], f"{path}.snapshot_at"),
         "symbol": _text(item["symbol"], f"{path}.symbol"),
@@ -1076,8 +1349,13 @@ def _normalize_position(value: Any, path: str) -> Dict[str, Any]:
 
 def _normalize_trade(value: Any, path: str) -> Dict[str, Any]:
     keys = {"market_date", "symbol", "side", "order_count", "execution_count", "executed_quantity", "data_status"}
-    item = _strict_object(value, keys, keys, path)
-    return {
+    item = _strict_object(value, keys | {"instrument"}, keys, path)
+    try:
+        instruments.safe_symbol(item["symbol"])
+        fact = instruments.normalize_instrument(item["instrument"], item["symbol"]) if "instrument" in item else None
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(str(exc)) from exc
+    result = {
         "market_date": _date(item["market_date"], f"{path}.market_date"),
         "symbol": _text(item["symbol"], f"{path}.symbol"),
         "side": _text(item["side"], f"{path}.side"),
@@ -1086,6 +1364,9 @@ def _normalize_trade(value: Any, path: str) -> Dict[str, Any]:
         "executed_quantity": _decimal(item["executed_quantity"], f"{path}.executed_quantity"),
         "data_status": _status(item["data_status"], f"{path}.data_status"),
     }
+    if fact is not None:
+        result["instrument"] = fact
+    return result
 
 
 def _normalize_market(value: Any, path: str) -> Dict[str, Any]:
@@ -1283,8 +1564,10 @@ def _normalize_weekly_attribution(value: Any, path: str) -> Dict[str, Any]:
     if status in {"empty", "blocked"}:
         raise StateContractError(f"{path} factual attribution cannot be empty or blocked")
     underlying = _text(item["underlying"], f"{path}.underlying")
-    if OPTION_IDENTITY_VALUE_RE.search(underlying):
-        raise StateContractError(f"{path}.underlying contains option contract identity")
+    try:
+        instruments.safe_symbol(underlying, option=False)
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(f"{path}.underlying contains option contract identity") from exc
     return {
         "underlying": underlying,
         "instrument_group": instrument_group,
@@ -1334,7 +1617,11 @@ def _normalize_weekly_review_item(value: Any, path: str) -> Dict[str, Any]:
     subject = _text(item["subject"], f"{path}.subject")
     summary = _text(item["summary"], f"{path}.summary")
     boundary = _text(item["evidence_boundary"], f"{path}.evidence_boundary")
-    if any(OPTION_IDENTITY_VALUE_RE.search(text) for text in (subject, summary, boundary)):
+    if any(
+        OPTION_IDENTITY_VALUE_RE.search(text)
+        or instruments.contains_contract_identity(text)
+        for text in (subject, summary, boundary)
+    ):
         raise StateContractError(f"{path} contains option contract identity")
     return {
         "item_kind": item_kind,
@@ -1372,9 +1659,12 @@ def normalize_plan_version(value: Any) -> Dict[str, Any]:
         "data_status",
         "zones",
     }
-    root = _strict_object(value, keys, keys, "$plan")
-    if root["schema_version"] != "trading-plan-state.v1":
+    root = _strict_object(value, keys | {"execution_context"}, keys, "$plan")
+    if root["schema_version"] not in {"trading-plan-state.v1", "trading-plan-state.v2"}:
         raise StateContractError("$plan.schema_version is unsupported")
+    contextual = root["schema_version"] == "trading-plan-state.v2"
+    if contextual != ("execution_context" in root):
+        raise StateContractError("execution context requires the v2 plan contract")
     stage = _text(root["plan_stage"], "$plan.plan_stage")
     setup = _text(root["setup_type"], "$plan.setup_type")
     status = _text(root["plan_status"], "$plan.plan_status")
@@ -1445,6 +1735,8 @@ def normalize_plan_version(value: Any) -> Dict[str, Any]:
         "bars_used",
         "atr14",
     }
+    if contextual:
+        evidence_keys |= {"symbol", "period"}
     evidence = _strict_object(root["evidence"], evidence_keys, evidence_keys, "$plan.evidence")
     evidence_id = _sha256(evidence["evidence_id"], "$plan.evidence.evidence_id")
     if _text(evidence["source"], "$plan.evidence.source") != "Longbridge":
@@ -1539,10 +1831,18 @@ def normalize_plan_version(value: Any) -> Dict[str, Any]:
                 raise StateContractError("confirmed price zones exceed maximum invalidation")
 
     underlying = _text(root["underlying"], "$plan.underlying")
-    if OPTION_IDENTITY_VALUE_RE.search(underlying):
-        raise StateContractError("$plan.underlying contains option contract identity")
-    return {
-        "schema_version": "trading-plan-state.v1",
+    try:
+        instruments.safe_symbol(underlying, option=False)
+        context = None
+        if contextual:
+            context = instruments.normalize_context(root["execution_context"], underlying=underlying, ready=status in {"confirmed", "expired"})
+            instruments.validate_daily_evidence(context, symbol=evidence["symbol"], period=evidence["period"])
+            if context["exception_note"] is not None:
+                _text(context["exception_note"], "$plan.execution_context.exception_note")
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(str(exc)) from exc
+    result = {
+        "schema_version": root["schema_version"],
         "plan_id": _text(root["plan_id"], "$plan.plan_id"),
         "version": version,
         "plan_stage": stage,
@@ -1571,6 +1871,9 @@ def normalize_plan_version(value: Any) -> Dict[str, Any]:
         "data_status": plan_data_status,
         "zones": zones,
     }
+    if contextual:
+        result.update(execution_context=context, evidence_symbol=evidence["symbol"], evidence_period=evidence["period"])
+    return result
 
 
 def _normalize_episode_assessment(value: Any, path: str) -> Dict[str, Any]:
@@ -1617,8 +1920,10 @@ def _normalize_episode_assessment(value: Any, path: str) -> Dict[str, Any]:
     if side not in {"buy", "sell"}:
         raise StateContractError(f"{path}.side must be buy or sell")
     underlying = _text(item["underlying"], f"{path}.underlying")
-    if OPTION_IDENTITY_VALUE_RE.search(underlying):
-        raise StateContractError(f"{path}.underlying contains option contract identity")
+    try:
+        instruments.safe_symbol(underlying, option=False)
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(f"{path}.underlying contains option contract identity") from exc
     return {
         "market_date": _date(item["market_date"], f"{path}.market_date"),
         "underlying": underlying,
@@ -1633,6 +1938,36 @@ def _normalize_episode_assessment(value: Any, path: str) -> Dict[str, Any]:
         "next_rule": _text(item["next_rule"], f"{path}.next_rule"),
         "data_status": _status(item["data_status"], f"{path}.data_status"),
     }
+
+
+def _normalize_instrument_episode(value: Any, path: str) -> Dict[str, Any]:
+    extra = {"trade_symbol", "tool_kind", "observation_timeframe", "trigger_timeframe", "trigger_basis"}
+    legacy = {
+        "market_date", "underlying", "side", "plan_id", "plan_version", "coverage_status",
+        "compliance_status", "outcome_status", "deviation_type", "reason", "next_rule", "data_status",
+    }
+    item = _strict_object(value, legacy | extra, legacy | extra, path)
+    base = _normalize_episode_assessment({key: item[key] for key in legacy}, path)
+    try:
+        fact = instruments.normalize_instrument(
+            {"tool_kind": item["tool_kind"], "underlying": base["underlying"]}, item["trade_symbol"]
+        )
+    except instruments.InstrumentContractError as exc:
+        raise StateContractError(f"{path} instrument identity is invalid") from exc
+    observation = item["observation_timeframe"]
+    trigger = item["trigger_timeframe"]
+    for field, value in (("observation_timeframe", observation), ("trigger_timeframe", trigger)):
+        if value is not None and value not in instruments.TIMEFRAMES:
+            raise StateContractError(f"{path}.{field} is unsupported")
+    basis = _text(item["trigger_basis"], f"{path}.trigger_basis")
+    if basis not in {"bar_close", "intrabar_touch", "unconfirmed"}:
+        raise StateContractError(f"{path}.trigger_basis is unsupported")
+    if base["coverage_status"] == "covered" and (observation is None or trigger is None or basis == "unconfirmed"):
+        raise StateContractError(f"{path} covered instrument episode requires exact time semantics")
+    if fact["tool_kind"] == "unknown" and base["compliance_status"] != "unassessable":
+        raise StateContractError(f"{path} unknown tool must remain unassessable")
+    return {**base, "trade_symbol": item["trade_symbol"], "tool_kind": fact["tool_kind"],
+            "observation_timeframe": observation, "trigger_timeframe": trigger, "trigger_basis": basis}
 
 
 def _rate(numerator: int, denominator: int) -> Optional[str]:
@@ -1729,9 +2064,10 @@ def normalize_weekly_review_bundle(value: Any) -> Dict[str, Any]:
     if schema_version not in {
         "trading-review-weekly-state.v1",
         "trading-review-weekly-state.v2",
+        "trading-review-weekly-state.v3",
     }:
         raise StateContractError("$weekly.schema_version is unsupported")
-    if schema_version == "trading-review-weekly-state.v2":
+    if schema_version in {"trading-review-weekly-state.v2", "trading-review-weekly-state.v3"}:
         missing = {"episode_assessments", "execution_metrics"} - set(root)
         if missing:
             raise StateContractError(
@@ -1827,7 +2163,7 @@ def normalize_weekly_review_bundle(value: Any) -> Dict[str, Any]:
     if len(cash_keys) != len(set(cash_keys)):
         raise StateContractError("$weekly.cash_flow_aggregates contains a duplicate natural key")
 
-    if schema_version == "trading-review-weekly-state.v2":
+    if schema_version in {"trading-review-weekly-state.v2", "trading-review-weekly-state.v3"}:
         if performance is not None or attributions or cash_flow_aggregates:
             raise StateContractError(
                 "weekly state v2 cannot contain performance, attribution, or cash-flow facts"
@@ -1835,11 +2171,11 @@ def normalize_weekly_review_bundle(value: Any) -> Dict[str, Any]:
         if not isinstance(root["episode_assessments"], list):
             raise StateContractError("$weekly.episode_assessments must be an array")
         episode_assessments = [
-            _normalize_episode_assessment(row, f"$weekly.episode_assessments[{index}]")
+            (_normalize_instrument_episode if schema_version.endswith(".v3") else _normalize_episode_assessment)(row, f"$weekly.episode_assessments[{index}]")
             for index, row in enumerate(root["episode_assessments"])
         ]
         episode_keys = [
-            (row["market_date"], row["underlying"], row["side"])
+            (row["market_date"], row.get("trade_symbol", row["underlying"]), row["side"])
             for row in episode_assessments
         ]
         if len(episode_keys) != len(set(episode_keys)):
@@ -1902,6 +2238,8 @@ def normalize_weekly_review_bundle(value: Any) -> Dict[str, Any]:
             "execution_metrics",
         )
     }
+    if schema_version == "trading-review-weekly-state.v3":
+        digest_payload["execution_basis"] = "instrument-episode.v1"
     if schema_version == "trading-review-weekly-state.v1":
         # Preserve historical v2 idempotency; no execution fields existed in
         # the original digest. New public runs accept only the v2 input.
@@ -2023,6 +2361,17 @@ class StateStore:
                 (period_start, period_end, partition["revision"]),
             )
         ]
+        facts = {
+            (row["market_date"], row["symbol"], row["side"]): {"underlying": row["underlying"], "tool_kind": row["tool_kind"]}
+            for row in self.connection.execute(
+                "SELECT * FROM trade_instrument_facts WHERE period_start=? AND period_end=? AND contract_version=? AND revision=?",
+                (period_start, period_end, version, partition["revision"]),
+            )
+        }
+        for row in payload:
+            fact = facts.get((row["market_date"], row["symbol"], row["side"]))
+            if fact is not None:
+                row["instrument"] = fact
         normalized = _normalize_payload("trades", payload, partition["status"])
         if content_hash(normalized) != partition["payload_hash"]:
             raise StateContractError("cached trade partition facts do not match payload_hash")
@@ -2097,6 +2446,12 @@ class StateStore:
                 (dataset, start, end, version, revision, normalized_status, collected, digest, error_category, supersedes),
             )
             self._write_facts(dataset, normalized, revision)
+            if dataset == "trades":
+                self.connection.executemany(
+                    "INSERT INTO trade_instrument_facts VALUES ('trades', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(start, end, version, revision, row["market_date"], row["symbol"], row["side"], row["instrument"]["underlying"], row["instrument"]["tool_kind"])
+                     for row in normalized if "instrument" in row],
+                )
         return PartitionResult("written", revision, digest, normalized_status)
 
     def _write_facts(self, dataset: str, payload: Any, revision: int) -> None:
@@ -2145,15 +2500,37 @@ class StateStore:
         started_at: str,
         data_status: str,
         source_contract_version: str,
-    ) -> None:
+    ) -> str:
         run_id = _text(run_id, "run_id")
         if mode not in {"daily", "weekly"}:
             raise StateContractError("mode must be daily or weekly")
+        normalized = {
+            "run_id": run_id,
+            "mode": mode,
+            "period_start": _date(period_start, "period_start"),
+            "period_end": _date(period_end, "period_end"),
+            "started_at": _timestamp(started_at, "started_at"),
+            "data_status": _status(data_status, "data_status"),
+            "source_contract_version": _text(source_contract_version, "source_contract_version"),
+        }
         with self._write():
+            existing = self.connection.execute(
+                "SELECT * FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if existing is not None:
+                same = all(existing[key] == normalized[key] for key in normalized)
+                if not same or existing["confirmation_status"] != "pending":
+                    raise StateContractError("run_id already exists with different or confirmed facts")
+                return "reused"
             self.connection.execute(
                 "INSERT INTO runs VALUES (?, ?, ?, ?, ?, NULL, ?, 'pending', ?)",
-                (run_id, mode, _date(period_start, "period_start"), _date(period_end, "period_end"), _timestamp(started_at, "started_at"), _status(data_status, "data_status"), _text(source_contract_version, "source_contract_version")),
+                (
+                    normalized["run_id"], normalized["mode"], normalized["period_start"],
+                    normalized["period_end"], normalized["started_at"],
+                    normalized["data_status"], normalized["source_contract_version"],
+                ),
             )
+        return "written"
 
     def finish_run(self, run_id: str, finished_at: str, data_status: str) -> None:
         with self._write():
@@ -2210,7 +2587,7 @@ class StateStore:
                 (key, row["version"]),
             )
         ]
-        return {
+        result = {
             "schema_version": "trading-plan-state.v1",
             "plan_id": row["plan_id"],
             "version": int(row["version"]),
@@ -2244,6 +2621,14 @@ class StateStore:
             "data_status": row["data_status"],
             "zones": zones,
         }
+        context = self.connection.execute(
+            "SELECT * FROM plan_execution_contexts WHERE plan_id=? AND plan_version=?", (key, row["version"])
+        ).fetchone()
+        if context is not None:
+            result["schema_version"] = "trading-plan-state.v2"
+            result["execution_context"] = {field: context[field] for field in instruments.CONTEXT_FIELDS}
+            result["evidence"].update(symbol=context["evidence_symbol"], period=context["evidence_period"])
+        return result
 
     def _verify_initial_buy(self, plan: Mapping[str, Any], parent: Mapping[str, Any]) -> None:
         """Verify the derived day/underlying/buy key against hash-checked facts.
@@ -2252,8 +2637,10 @@ class StateStore:
         identifiers or execution prices enter the plan projection.
         """
         parts = plan["initial_buy_episode_key"].split("|")
-        if len(parts) != 3 or parts[1] != plan["underlying"] or parts[2] != "buy":
-            raise StateContractError("initial buy key must be market_date|underlying|buy")
+        context = plan.get("execution_context")
+        trade_symbol = context["trade_symbol"] if context else plan["underlying"]
+        if len(parts) != 3 or parts[1] != trade_symbol or parts[2] != "buy":
+            raise StateContractError("initial buy key must be market_date|actual_trade_symbol|buy")
         market_date = _date(parts[0], "initial_buy_episode_key.market_date")
         partition = self.connection.execute(
             """SELECT * FROM partitions WHERE dataset='trades'
@@ -2267,9 +2654,16 @@ class StateStore:
             market_date, market_date, partition["contract_version"]
         )
         if not any(
-            row["symbol"] == plan["underlying"] and row["side"].lower() == "buy"
+            row["symbol"] == trade_symbol and row["side"].lower() == "buy"
             and row["execution_count"] > 0 and Decimal(row["executed_quantity"]) > 0
             and row["data_status"] == "complete"
+            and (
+                context is None
+                or instruments.matches(
+                    context, row["symbol"], row.get("instrument"),
+                    underlying=plan["underlying"],
+                )
+            )
             for row in snapshot["payload"]
         ):
             raise StateContractError("position_management has no verified actual underlying buy")
@@ -2343,14 +2737,19 @@ class StateStore:
                         "initial_buy_episode_key",
                         "data_status",
                         "zones",
+                        "execution_context", "evidence_symbol", "evidence_period",
                     }
                     if latest["plan_status"] != expected_prior_status or any(
-                        latest_normalized[field] != normalized[field]
+                        latest_normalized.get(field) != normalized.get(field)
                         for field in immutable_fields
                     ):
                         raise StateContractError(
                             f"{normalized['plan_status']} transition must preserve exact plan content"
                         )
+
+                prior_context = self.get_plan_version(normalized["plan_id"], latest_version).get("execution_context")
+                if prior_context != normalized.get("execution_context") and latest["content_hash"] == normalized["content_hash"]:
+                    raise StateContractError("changed execution context requires a new draft content hash")
 
             if normalized["plan_stage"] == "position_management":
                 parent = self.connection.execute(
@@ -2366,6 +2765,12 @@ class StateStore:
                     or parent["direction"] != normalized["direction"]
                 ):
                     raise StateContractError("position_management parent must match underlying and direction")
+                parent_context = self.get_plan_version(parent["plan_id"], parent["version"]).get("execution_context")
+                context = normalized.get("execution_context")
+                if (parent_context is None) != (context is None) or (context is not None and (
+                    parent_context["trade_symbol"] != context["trade_symbol"] or parent_context["tool_kind"] != context["tool_kind"]
+                )):
+                    raise StateContractError("management parent must match the exact execution instrument")
                 self._verify_initial_buy(normalized, parent)
 
             self.connection.execute(
@@ -2390,6 +2795,13 @@ class StateStore:
                 """,
                 normalized,
             )
+            if "execution_context" in normalized:
+                self.connection.execute(
+                    "INSERT INTO plan_execution_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (normalized["plan_id"], normalized["version"],
+                     *(normalized["execution_context"][key] for key in instruments.CONTEXT_FIELDS),
+                     normalized["evidence_symbol"], normalized["evidence_period"]),
+                )
             self.connection.executemany(
                 """
                 INSERT INTO plan_zones(
@@ -2471,6 +2883,19 @@ class StateStore:
                 )
             if plan["underlying"] != assessment["underlying"]:
                 raise StateContractError("covered weekly episode underlying does not match its plan")
+            if normalized["schema_version"].endswith(".v3"):
+                plan_projection = self.get_plan_version(plan["plan_id"], plan["version"])
+                context = plan_projection.get("execution_context")
+                if context is None or not instruments.matches(
+                    context, assessment["trade_symbol"],
+                    {"tool_kind": assessment["tool_kind"], "underlying": assessment["underlying"]},
+                    underlying=assessment["underlying"],
+                ):
+                    raise StateContractError("covered instrument episode does not match its exact plan tool")
+                if (context["observation_timeframe"], context["trigger_timeframe"], context["trigger_basis"]) != (
+                    assessment["observation_timeframe"], assessment["trigger_timeframe"], assessment["trigger_basis"]
+                ):
+                    raise StateContractError("covered instrument episode time semantics differ from its plan")
 
         for dependency in normalized["dependencies"]:
             partition = self.connection.execute(
@@ -2518,15 +2943,33 @@ class StateStore:
                     side = row["side"].lower()
                     if side not in {"buy", "sell"}:
                         continue
-                    eligible_keys.add((row["market_date"], row["symbol"].removesuffix(":OPTION"), side))
-            assessment_keys = {
+                    if normalized["schema_version"].endswith(".v3"):
+                        if "instrument" not in row:
+                            raise StateContractError("instrument-level execution metrics require explicit trade instrument facts")
+                        eligible_keys.add((row["market_date"], row["symbol"], side, row["instrument"]["underlying"], row["instrument"]["tool_kind"]))
+                    else:
+                        eligible_keys.add((row["market_date"], row["symbol"].removesuffix(":OPTION"), side))
+            assessment_keys = ({
+                (row["market_date"], row["trade_symbol"], row["side"], row["underlying"], row["tool_kind"])
+                for row in normalized["episode_assessments"]
+            } if normalized["schema_version"].endswith(".v3") else {
                 (row["market_date"], row["underlying"], row["side"])
                 for row in normalized["episode_assessments"]
-            }
+            })
             if eligible_keys != assessment_keys:
                 raise StateContractError("execution assessments must match every verified eligible trade episode")
 
         with self._write():
+            # Repeat the volatile dependency check under the single-writer
+            # transaction; the earlier check produced the assessment, this one
+            # prevents a newer partition racing the immutable review insert.
+            for dependency in normalized["dependencies"]:
+                current = self._latest_partition(
+                    dependency["dataset"], dependency["period_start"],
+                    dependency["period_end"], dependency["contract_version"],
+                )
+                if current is None or int(current["revision"]) != dependency["partition_revision"] or current["payload_hash"] != dependency["payload_hash"]:
+                    raise StateContractError("weekly dependency changed before review commit")
             latest = self.connection.execute(
                 """
                 SELECT * FROM weekly_reviews
@@ -2686,33 +3129,22 @@ class StateStore:
                     for index, row in enumerate(normalized["review_items"])
                 ],
             )
-            self.connection.executemany(
-                """
-                INSERT INTO trade_episode_assessments VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            if normalized["schema_version"].endswith(".v3"):
+                self.connection.execute(
+                    "INSERT INTO weekly_execution_bases VALUES (?, ?, 'instrument-episode.v1')",
+                    (normalized["review_key"], revision),
                 )
-                """,
-                [
-                    (
-                        normalized["review_key"],
-                        revision,
-                        index,
-                        row["market_date"],
-                        row["underlying"],
-                        row["side"],
-                        row["plan_id"],
-                        row["plan_version"],
-                        row["coverage_status"],
-                        row["compliance_status"],
-                        row["outcome_status"],
-                        row["deviation_type"],
-                        row["reason"],
-                        row["next_rule"],
-                        row["data_status"],
-                    )
-                    for index, row in enumerate(normalized["episode_assessments"])
-                ],
-            )
+                self.connection.executemany(
+                    "INSERT INTO instrument_episode_assessments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(normalized["review_key"], revision, index, row["market_date"], row["trade_symbol"], row["underlying"], row["tool_kind"], row["side"], row["plan_id"], row["plan_version"], row["observation_timeframe"], row["trigger_timeframe"], row["trigger_basis"], row["coverage_status"], row["compliance_status"], row["outcome_status"], row["deviation_type"], row["reason"], row["next_rule"], row["data_status"])
+                     for index, row in enumerate(normalized["episode_assessments"])],
+                )
+            else:
+                self.connection.executemany(
+                    "INSERT INTO trade_episode_assessments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(normalized["review_key"], revision, index, row["market_date"], row["underlying"], row["side"], row["plan_id"], row["plan_version"], row["coverage_status"], row["compliance_status"], row["outcome_status"], row["deviation_type"], row["reason"], row["next_rule"], row["data_status"])
+                     for index, row in enumerate(normalized["episode_assessments"])],
+                )
             execution_metrics = normalized["execution_metrics"]
             if execution_metrics is not None:
                 self.connection.execute(
@@ -2824,6 +3256,10 @@ class StateStore:
             """,
             (key, review_revision),
         ).fetchone()
+        execution_basis = self.connection.execute(
+            "SELECT * FROM weekly_execution_bases WHERE review_key=? AND review_revision=?",
+            (key, review_revision),
+        ).fetchone()
         confirmation = self.connection.execute(
             """
             SELECT * FROM confirmations
@@ -2899,13 +3335,13 @@ class StateStore:
                     (key, review_revision),
                 )
             ],
+            "execution_basis": None if execution_basis is None else dict(execution_basis),
             "episode_assessments": [
                 dict(row)
                 for row in self.connection.execute(
-                    """
-                    SELECT * FROM trade_episode_assessments
-                    WHERE review_key=? AND review_revision=? ORDER BY episode_index
-                    """,
+                    ("SELECT * FROM instrument_episode_assessments WHERE review_key=? AND review_revision=? ORDER BY episode_index"
+                     if execution_basis is not None else
+                     "SELECT * FROM trade_episode_assessments WHERE review_key=? AND review_revision=? ORDER BY episode_index"),
                     (key, review_revision),
                 )
             ],

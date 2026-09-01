@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
-import type { CalendarEvent, Daily, DisplaySnapshot, PlanDetail, Position, Status, Weekly, WeeklyItem, WeeklySection } from './types.ts';
+import type { CalendarEvent, Daily, DisplaySnapshot, ExecutionContext, PlanDetail, Position, Status, Weekly, WeeklyItem, WeeklySection } from './types.ts';
 
 const TEMPLATE = new URL('../assets/trade-review-dashboard-v2-standalone.html', import.meta.url);
 const MARKER = '<!--__TRADING_REVIEW_DASHBOARD_V2_BODY__-->';
 const labels: Record<Status, string> = { complete: '已完成', partial: '部分可用', empty: '暂无数据', stale: '数据陈旧', blocked: '待核对' };
 const diagnostic = /(?:\b(?:hash|sha-?256|revision|partition|payload|underlying|setup|CLI|schema|snapshot_at|source_scope|finance-calendar|macrodata|projection)\b|\b[a-z]+(?:_[a-z0-9]+)+\b|\b[0-9a-f]{32,}\b|半开|白名单|勾稽|消歧|分区|修订版本|修订编号|修订号|版本修订|字段|接口|投影|数据规范|数据契约|\/private\/|\/Users\/)/i;
 const nonUS = /\b[A-Z0-9][A-Z0-9.\-]*\.(?:HK|SH|SZ|SG|JP)\b/i;
-const isUS = (s: string) => /^[A-Z][A-Z0-9.\-]*\.US$/i.test(s);
+const isUS = (s: string) => /^[A-Z][A-Z0-9.\-]*\.US(?::OPTION)?$/i.test(s);
 export const escape = (value: unknown): string => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
 const ui = (value: unknown, fallback = '待核对') => {
   const text = String(value);
@@ -69,11 +69,10 @@ function market(d: Daily, w: Weekly | null): string {
     const direction = m.status === 'complete' && r.data_status === 'complete' ? r.direction : 'flat';
     const flow = r.capital_flow ? `<small class="v2-flow">标的资金流 · ${escape(r.capital_flow.label)} ${number(r.capital_flow.value)} · ${escape(labels[r.capital_flow.data_status])}</small>` : '';
     const unavailable = r.unavailable_reason ? `<small class="v2-unavailable-note">${ui(r.unavailable_reason, '报价待核对')}</small>` : '';
-    const dots = [0, 1, 2].map(i => `<span class="v2-meter-dot${i < r.strength ? ' is-on' : ''}" aria-hidden="true"></span>`).join('');
     return `<div class="v2-market-row"><div class="v2-market-name"><strong>${ui(r.name)}</strong><small>${ui(r.symbol)}${r.is_proxy ? ` · 代理：${ui(r.proxy_for)}` : ''} · ${ui(r.session)}</small>${flow}${unavailable}</div>
-      <div class="v2-market-direction v2-direction-${direction}"><strong>${{ up: '↑', down: '↓', flat: '→' }[r.direction]}</strong><small>${escape(pct(r.change_pct))}</small></div><div class="v2-market-strength" aria-label="强度 ${r.strength}/3">${dots}</div><div class="v2-market-state"><strong>${ui(r.state)}</strong><small>${escape(number(r.value))}</small></div></div>`;
+      <div class="v2-market-value"><strong>${escape(number(r.value))}</strong></div><div class="v2-market-direction v2-direction-${direction}"><strong>${escape(pct(r.change_pct))}</strong></div><div class="v2-market-state"><strong>${ui(r.state)}</strong></div></div>`;
   }).join('') || '<div class="v2-empty">暂无已确认市场数据</div>';
-  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1>${badge(m.status)}</div><p class="v2-side-note">相对昨日收盘；代理价格不等同于指数或收益率。</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>方向</span><span>强度</span><span>状态</span></div><div class="v2-market-list" role="table">${rows}</div><p class="v2-side-note">Longbridge · ${escape(timeLabel(d.meta.market_as_of))}</p>${weeklyInline(w, 'market_radar', '周度市场背景')}</section>`;
+  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1>${badge(m.status)}</div><p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>最新值</span><span>涨跌幅</span><span>状态</span></div><div class="v2-market-list" role="table">${rows}</div><p class="v2-side-note">Longbridge · ${escape(timeLabel(d.meta.market_as_of))}</p>${weeklyInline(w, 'market_radar', '周度市场背景')}</section>`;
 }
 function analysis(d: Daily, w: Weekly | null): string {
   const a = d.codex_analysis;
@@ -101,6 +100,18 @@ function planDetail(d: PlanDetail | null | undefined): string {
   const readiness = !d.zones.some(z => z.kind === action) ? '仅观察：确认条件未齐，暂无可执行区间。' : d.plan_status !== 'confirmed' ? '区间仅为草案；该版本经你确认后才生效。' : '仅在该版本的全部条件满足时有效，不是无条件买卖指令。';
   return `<div class="v2-plan-detail"><div class="v2-plan-detail-header"><strong>${setup[d.setup_type]}</strong><span class="v2-status-badge v2-status-${{ draft: 'partial', confirmed: 'complete', expired: 'stale' }[d.plan_status]}">${{ draft: '待确认草案', confirmed: '已确认计划', expired: '已到期' }[d.plan_status]}</span><small>${quotes[d.quote_relation]}</small></div><small class="v2-plan-evidence">技术参考：${escape(d.evidence.as_of)} 收盘 · EMA20/50/200 · ATR14 ${escape(d.evidence.atr14)}</small><div class="v2-plan-zones">${zoneRows}</div><small class="v2-plan-evidence">${readiness}</small></div>`;
 }
+function executionContext(c: ExecutionContext | null | undefined): string {
+  if (!c) return '<div class="v2-execution-context"><small>交易工具与观察周期：待确认</small></div>';
+  const tool = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'LEAP Call' }[c.tool_kind];
+  const timeframe = { '1H': '1小时线', '4H': '4小时线', '1D': '日线', '1W': '周线' } as const;
+  const traded = c.tool_kind === 'leap_call' && c.trade_symbol.endsWith(':OPTION')
+    ? `${c.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} LEAP（脱敏）`
+    : c.trade_symbol.replace(/\.US$/i, '');
+  const observation = c.observation_symbol ? c.observation_symbol.replace(/\.US$/i, '') : '待确认';
+  const basis = { bar_close: '收线确认', intrabar_touch: '盘中触及', unconfirmed: '待确认' }[c.trigger_basis];
+  const exception = c.trigger_timeframe !== c.observation_timeframe ? ` · 触发周期：${c.trigger_timeframe ? timeframe[c.trigger_timeframe] : '待确认'}（预先约定的例外）` : '';
+  return `<div class="v2-execution-context"><small>交易工具：${escape(tool)} · 实际交易对象：${escape(traded)} · 观察对象：${escape(observation)} · 观察周期：${escape(c.observation_timeframe ? timeframe[c.observation_timeframe] : '待确认')} · 触发方式：${escape(basis)}${escape(exception)}</small></div>`;
+}
 function planRow(r: Position, verified: boolean): string {
   const t = r.trigger_distance;
   const tone = !verified && ['red', 'green'].includes(t.tone) ? 'amber' : t.tone;
@@ -108,7 +119,17 @@ function planRow(r: Position, verified: boolean): string {
   const classes = ['v2-plan-row', `v2-tab-${r.tab}`, r.near_trigger ? 'v2-near-trigger' : '', r.has_gap ? 'v2-has-gap' : ''].filter(Boolean).join(' ');
   const symbolNote = ui(r.symbol) === ui(r.display_name) ? '' : `<small>${ui(r.symbol)}</small>`;
   const detailLabel = !r.plan_detail ? '查看观察条件与下一步' : r.tab === 'holdings' ? '查看持仓计划' : '查看买入计划';
-  return `<div class="${classes}" data-tab="${r.tab}"><div class="v2-plan-symbol"><strong>${ui(r.display_name)}</strong>${symbolNote}</div><div class="v2-plan-role"><strong>${ui(r.role, r.tab === 'holdings' ? '持仓' : '买入候选')}</strong><small>${ui(r.holding_state, r.tab === 'holdings' ? '本次读取时持仓' : '尚未持有')}</small></div><div class="v2-plan-coverage">${ui(r.plan_coverage, '计划待确认')}</div><div class="v2-trigger v2-tone-${tone}"><small>${ui(t.label, '触发条件')}</small><strong>${ui(t.value, '待确认')}</strong></div><details class="v2-plan-checks"><summary>${detailLabel}</summary><div class="v2-plan-check-grid"><div class="v2-plan-list"><strong>验证信号</strong>${list(r.signals, '信号待确认')}</div><div class="v2-plan-list"><strong>失效条件</strong>${list(r.invalidation, '失效条件待确认')}</div><div class="v2-plan-list"><strong>下一步检查</strong>${list(r.next_checks, '先确认计划')}</div></div>${r.has_gap && r.gap ? `<small class="v2-gap-label">${ui(r.gap, '计划条件待确认')}</small>` : ''}${planDetail(r.plan_detail)}</details></div>`;
+  return `<div class="${classes}" data-tab="${r.tab}"><div class="v2-plan-symbol"><strong>${ui(r.display_name)}</strong>${symbolNote}</div><div class="v2-plan-role"><strong>${ui(r.role, r.tab === 'holdings' ? '持仓' : '买入候选')}</strong><small>${ui(r.holding_state, r.tab === 'holdings' ? '本次读取时持仓' : '尚未持有')}</small></div><div class="v2-plan-coverage">${ui(r.plan_coverage, '计划待确认')}</div><div class="v2-trigger v2-tone-${tone}"><small>${ui(t.label, '触发条件')}</small><strong>${ui(t.value, '待确认')}</strong></div>${valuation(r)}${executionContext(r.execution_context)}<details class="v2-plan-checks"><summary>${detailLabel}</summary><div class="v2-plan-check-grid"><div class="v2-plan-list"><strong>验证信号</strong>${list(r.signals, '信号待确认')}</div><div class="v2-plan-list"><strong>失效条件</strong>${list(r.invalidation, '失效条件待确认')}</div><div class="v2-plan-list"><strong>下一步检查</strong>${list(r.next_checks, '先确认计划')}</div></div>${r.has_gap && r.gap ? `<small class="v2-gap-label">${ui(r.gap, '计划条件待确认')}</small>` : ''}${planDetail(r.plan_detail)}</details></div>`;
+}
+function valuation(r: Position): string {
+  const v = r.valuation;
+  if (!v) return '';
+  const label = { available: v.pr === null ? '待补充' : number(Number(v.pr)), unavailable: '待补充', not_applicable: '不适用', stale: '数据较旧' }[v.status];
+  const pe = v.pe_ttm === null ? '' : `<span>PE(TTM) <b>${number(Number(v.pe_ttm))}</b></span>`;
+  const roe = v.roe_pct === null ? '' : `<span>ROE <b>${number(Number(v.roe_pct))}%</b> · ${escape(v.roe_period_label)}</span>`;
+  const end = v.roe_period_end ? `年度截至 ${escape(v.roe_period_end)} · ` : '';
+  const gap = v.gap ? `<span class="v2-valuation-gap">${ui(v.gap, '估值证据待补充')}</span>` : '';
+  return `<div class="v2-valuation" data-valuation-status="${v.status}"><strong>市赚率 <b>${escape(label)}</b></strong>${pe}${roe}${gap}<small>${end}读取 ${escape(timeLabel(v.as_of))}</small></div>`;
 }
 function executionStrip(w: Weekly | null): string {
   if (!w) return '';
@@ -131,7 +152,10 @@ function weeklyReview(w: Weekly | null): string {
   const episodes = w.review_episodes.filter(r => isUS(r.underlying)).map(r => {
     const compliance = { compliant: '按计划执行', non_compliant: '未按计划执行', unassessable: '执行不可评估' }[r.compliance_status];
     const outcome = { success: '计划成功', failure: '计划失败', open: '尚未结束', flat: '结果持平', unverifiable: '结果不可核验' }[r.outcome_status];
-    return `<article class="v2-episode-review"><div><strong>${escape(r.market_date)} · ${ui(r.underlying)} · ${r.side === 'buy' ? '买入' : r.side === 'sell' ? '卖出' : '交易'}</strong>${badge(r.data_status)}</div><p>${compliance} · ${outcome}</p><small>${r.plan_id === null ? '无事前已确认计划' : '依据事前已确认计划复核'}</small><p><strong>原因：</strong>${ui(r.reason, '原因待复核')}</p><p><strong>下一条规则：</strong>${ui(r.next_rule, '先核对事前计划')}</p></article>`;
+    const tool = r.tool_kind ? { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', leap_call: 'LEAP Call', unknown: '工具待确认' }[r.tool_kind] : '历史记录：工具未区分';
+    const frame = r.observation_timeframe ? { '1H': '1小时线', '4H': '4小时线', '1D': '日线', '1W': '周线' }[r.observation_timeframe] : '周期待确认';
+    const actual = r.trade_symbol ? `实际交易对象：${r.tool_kind === 'leap_call' && r.trade_symbol.endsWith(':OPTION') ? `${r.trade_symbol.replace(/:OPTION$/i, '').replace(/\.US$/i, '')} LEAP（脱敏）` : r.trade_symbol.replace(/\.US$/i, '')} · ` : '';
+    return `<article class="v2-episode-review"><div><strong>${escape(r.market_date)} · ${ui(r.underlying)} · ${r.side === 'buy' ? '买入' : r.side === 'sell' ? '卖出' : '交易'}</strong>${badge(r.data_status)}</div><p>${escape(actual)}${escape(tool)} · ${escape(frame)} · ${compliance} · ${outcome}</p><small>${r.plan_id === null ? '无事前已确认计划' : '依据事前已确认计划复核'}</small><p><strong>原因：</strong>${ui(r.reason, '原因待复核')}</p><p><strong>下一条规则：</strong>${ui(r.next_rule, '先核对事前计划')}</p></article>`;
   });
   return (episodes.length ? `<details class="v2-weekly-inline v2-episode-details"><summary><strong>需具体复盘 · ${episodes.length} 笔</strong><span>只看执行与规则</span></summary><div class="v2-weekly-stack">${episodes.join('')}</div></details>` : '') + weeklyInline(w, 'positions_plan', '周度持仓计划回看') + weeklyInline(w, 'plan_review', '计划复核与纪律') + weeklyInline(w, 'next_week', '后续计划待确认');
 }
@@ -139,7 +163,8 @@ function positions(d: Daily, w: Weekly | null): string {
   const p = d.positions_plans;
   const held = p.items.filter(r => isUS(r.symbol) && r.tab === 'holdings');
   const plans = p.items.filter(r => isUS(r.symbol) && r.tab === 'plan').filter(r => {
-    const existing = held.find(h => h.symbol.toUpperCase() === r.symbol.toUpperCase());
+    const key = (x: Position) => `${x.execution_context?.trade_symbol ?? x.symbol}|${x.execution_context?.tool_kind ?? x.instrument?.tool_kind ?? 'unknown'}`.toUpperCase();
+    const existing = held.find(h => key(h) === key(r));
     if (existing && r.plan_detail && JSON.stringify(r.plan_detail) !== JSON.stringify(existing.plan_detail)) throw new Error('held_plan_requires_reconciliation');
     return !existing;
   });

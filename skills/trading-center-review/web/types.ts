@@ -6,19 +6,31 @@ interface Module { status: Status; note?: string; title: string }
 interface LabeledText { label: string; text: string }
 export interface PlanDetail {
   plan_id: string; version: number; plan_stage: 'pre_entry' | 'position_management';
+  underlying?: string;
   plan_status: 'draft' | 'confirmed' | 'expired';
   setup_type: 'pullback' | 'breakout' | 'range' | 'bottom_reversal' | 'position_management';
   parent_plan_id: string | null; parent_plan_version: number | null; initial_buy_episode_key: string | null;
+  execution_context?: ExecutionContext;
   quote_relation: 'below' | 'inside' | 'above' | 'stale' | 'unavailable';
-  evidence: { evidence_id: string; source: 'Longbridge'; as_of: string; timezone: 'America/New_York'; adjustment: string; bars_used: number; atr14: string };
+  evidence: { evidence_id: string; source: 'Longbridge'; as_of: string; timezone: 'America/New_York'; adjustment: string; bars_used: number; atr14: string; symbol?: string; period?: '1D' };
   zones: { kind: 'observation' | 'entry' | 'add' | 'reduce' | 'exit' | 'invalidation'; low: string; high: string; currency: string; condition: string; derived_from: string; data_status: Status }[];
 }
+export interface Instrument { tool_kind: 'stock' | 'single_stock_leveraged_etf' | 'leap_call' | 'unknown'; underlying: string }
+export interface ExecutionContext { tool_kind: 'stock' | 'single_stock_leveraged_etf' | 'leap_call'; trade_symbol: string; observation_symbol: string | null; observation_timeframe: '1H' | '4H' | '1D' | '1W' | null; trigger_timeframe: '1H' | '4H' | '1D' | '1W' | null; trigger_basis: 'bar_close' | 'intrabar_touch' | 'unconfirmed'; exception_note: string | null }
 export interface Position {
   symbol: string; display_name: string; tab: 'holdings' | 'plan'; role: string; holding_state: string;
   plan_coverage: string; trigger_distance: { label: string; value: string; tone: Tone };
   near_trigger: boolean; signals: string[]; invalidation: string[]; next_checks: string[];
   has_gap: boolean; gap: string; boundary: string; data_status: Status;
-  plan_detail?: PlanDetail | null; strategy_category?: string | null;
+  plan_detail?: PlanDetail | null; strategy_category?: string | null; valuation?: Valuation | null;
+  instrument?: Instrument; execution_context?: ExecutionContext;
+}
+export interface Valuation {
+  symbol: string; instrument_type: 'company' | 'fund'; as_of: string;
+  pe_ttm: string | null; roe_pct: string | null; roe_period_end: string | null;
+  roe_period_label: string | null; roe_basis: 'annual' | null; pr: string | null;
+  roe_quality: 'positive_income_equity' | 'nonpositive' | 'unverified' | 'not_applicable';
+  status: 'available' | 'unavailable' | 'not_applicable' | 'stale'; gap: string; source: 'Longbridge';
 }
 export interface CalendarEvent {
   et_date: string; et_time: string; shanghai_time: string; title: string;
@@ -62,7 +74,8 @@ export interface Weekly {
   review_episodes: { market_date: string; underlying: string; side: string; plan_id: string | null; plan_version: number | null;
     coverage_status: 'covered' | 'uncovered'; compliance_status: 'compliant' | 'non_compliant' | 'unassessable';
     outcome_status: 'success' | 'failure' | 'open' | 'flat' | 'unverifiable'; deviation_type: string | null;
-    reason: string; next_rule: string; data_status: Status }[];
+    reason: string; next_rule: string; data_status: Status; trade_symbol?: string; tool_kind?: Instrument['tool_kind'];
+    observation_timeframe?: ExecutionContext['observation_timeframe']; trigger_timeframe?: ExecutionContext['trigger_timeframe']; trigger_basis?: ExecutionContext['trigger_basis'] }[];
   sections: Record<WeeklySection, WeeklyItem[]>;
 }
 export interface DisplaySnapshot { schema_version: 'trading-review-display.v1'; daily: Daily; weekly: Weekly | null }

@@ -23,6 +23,7 @@ import trading_review_state as state
 
 PRIVATE_FACTS_SCHEMA = "trading-review-weekly-private-facts.v2"
 STATE_SCHEMA = "trading-review-weekly-state.v2"
+STATE_SCHEMA_V3 = "trading-review-weekly-state.v3"
 SUBJECT_SEPARATOR = "｜"
 SUBJECT_SECTIONS = frozenset(
     {
@@ -71,6 +72,8 @@ def _text(value: Any, path: str) -> str:
     text = value.strip()
     if state.SENSITIVE_VALUE_RE.search(text):
         raise WeeklyProjectionError(f"{path} contains a forbidden sensitive value")
+    if state.instruments.contains_contract_identity(text):
+        raise WeeklyProjectionError(f"{path} contains option contract identity")
     return text
 
 
@@ -160,6 +163,11 @@ def _item(
 def _underlying(symbol: Any, explicit_underlying: Any, path: str) -> str:
     underlying = _text(explicit_underlying, f"{path}.underlying")
     symbol_text = _text(symbol, f"{path}.symbol")
+    try:
+        state.instruments.safe_symbol(symbol_text)
+        state.instruments.safe_symbol(underlying, option=False)
+    except state.instruments.InstrumentContractError as exc:
+        raise WeeklyProjectionError(f"{path} contains a contract identity") from exc
     if ":OPTION" in symbol_text and symbol_text != f"{underlying}:OPTION":
         raise WeeklyProjectionError(f"{path}.symbol is not an underlying-only option projection")
     if ":OPTION" not in symbol_text and symbol_text != underlying:
@@ -309,13 +317,12 @@ def project_weekly_state(
                 expected_status=day_status,
             )
         )
-        underlyings = sorted(
-            {
-                _underlying(row.get("symbol"), row.get("symbol", "").replace(":OPTION", ""), f"{path}.rows[{row_index}]")
-                for row_index, row in enumerate(rows)
-                if isinstance(row, dict)
-            }
-        )
+        underlyings = sorted({
+            (state.instruments.normalize_instrument(row["instrument"], row.get("symbol"))["underlying"]
+             if isinstance(row, dict) and "instrument" in row else
+             _underlying(row.get("symbol"), row.get("symbol", "").replace(":OPTION", ""), f"{path}.rows[{row_index}]"))
+            for row_index, row in enumerate(rows) if isinstance(row, dict)
+        })
         order_count = _integer(day.get("order_count"), f"{path}.order_count")
         execution_count = _integer(day.get("execution_count"), f"{path}.execution_count")
         duplicate_count = _integer(
@@ -449,11 +456,19 @@ def project_weekly_state(
     raw_assessments = plan.get("episode_assessments", [])
     if not isinstance(raw_assessments, list):
         raise WeeklyProjectionError("$.plan.episode_assessments must be an array")
+    execution_basis = plan.get("execution_basis")
+    if execution_basis is not None and execution_basis != "instrument-episode.v1":
+        raise WeeklyProjectionError("$.plan.execution_basis is unsupported")
+    instrument_level = execution_basis == "instrument-episode.v1"
+    contextual_rows = [isinstance(row, dict) and "trade_symbol" in row for row in raw_assessments]
+    if instrument_level and not all(contextual_rows):
+        raise WeeklyProjectionError("instrument-level assessments require trade_symbol on every row")
+    if not instrument_level and any(contextual_rows):
+        raise WeeklyProjectionError("instrument-level assessments require an explicit execution_basis")
     episode_assessments = [
-        state._normalize_episode_assessment(
+        (state._normalize_instrument_episode if instrument_level else state._normalize_episode_assessment)(
             row, f"$.plan.episode_assessments[{index}]"
-        )
-        for index, row in enumerate(raw_assessments)
+        ) for index, row in enumerate(raw_assessments)
     ]
     metrics_status_value = plan.get("metrics_status")
     if metrics_status_value is None:
@@ -624,7 +639,7 @@ def project_weekly_state(
     if overall_status not in {"complete", "partial", "blocked"}:
         raise WeeklyProjectionError("weekly overall status must be complete, partial, or blocked")
     bundle = {
-        "schema_version": STATE_SCHEMA,
+        "schema_version": STATE_SCHEMA_V3 if instrument_level else STATE_SCHEMA,
         "run_id": _text(root["run_id"], "$.run_id"),
         "review_key": f"weekly:{period_start}:{period_end}",
         "period_start": period_start,
@@ -688,7 +703,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ):
         print(json.dumps({"status": "blocked", "error_category": "weekly_projection_failure"}, ensure_ascii=False))
         return 2
-    print(json.dumps({"status": "completed", "schema_version": STATE_SCHEMA}, ensure_ascii=False))
+    print(json.dumps({"status": "completed", "schema_version": bundle["schema_version"]}, ensure_ascii=False))
     return 0
 
 

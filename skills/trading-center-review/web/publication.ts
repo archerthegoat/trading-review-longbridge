@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import type { DisplaySnapshot } from './types.ts';
 import { render } from './render.ts';
-import { validate, project, weeklyData, weeklyFromDatabase } from './data.ts';
+import { validate, project, weeklyData, weeklyFromDatabase, enrichFromDatabase } from './data.ts';
 import { PrivateTree, HASH, hash, jsonBytes, parseJson, object, missing, privateInput, canonical } from './private-store.ts';
 
 export const ROUTE = /^\/[a-z0-9][a-z0-9-]{0,79}\/$/;
@@ -63,7 +63,7 @@ export class PublicationStore extends PrivateTree {
     });
   }
 }
-export function prepare(store: PublicationStore, inputs: { dailyInput?: string; displayInput?: string; weeklyInput?: string; weeklyKey?: string } = {}): { view: DisplaySnapshot; current: string | null } {
+export function prepare(store: PublicationStore, inputs: { dailyInput?: string; displayInput?: string; weeklyInput?: string; weeklyKey?: string; enrichDb?: boolean } = {}): { view: DisplaySnapshot; current: string | null } {
   if (inputs.dailyInput && inputs.displayInput) throw new Error('choose_one_daily_source');
   if (inputs.weeklyInput && inputs.weeklyKey) throw new Error('choose_one_weekly_source');
   let saved: DisplaySnapshot | null = null, current: string | null = null;
@@ -75,5 +75,6 @@ export function prepare(store: PublicationStore, inputs: { dailyInput?: string; 
   else if (inputs.dailyInput) view = project(privateInput(inputs.dailyInput), weekly);
   else if (saved) view = { ...saved, weekly };
   else throw new Error('first_publication_requires_daily_input');
+  if (inputs.enrichDb) view = enrichFromDatabase(view);
   return { view: validate(view), current };
 }

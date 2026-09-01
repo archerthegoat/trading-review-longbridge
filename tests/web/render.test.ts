@@ -62,3 +62,64 @@ test('internal diagnostics stay out but economic revisions remain visible', () =
   assert.match(html, /就业数据向下修订/); assert.doesNotMatch(html, /partition revision/);
   assert.doesNotMatch(html, /<script|<iframe|onload=|onclick=/i);
 });
+test('radar presents actual values and percentage changes, without a fabricated strength', () => {
+  const v = snapshot();
+  v.daily.market.items[0]!.value = 123.45;
+  v.daily.market.items[0]!.change_pct = -1.25;
+  v.daily.market.items[0]!.direction = 'down';
+  v.daily.market.items[0]!.strength = 0;
+  const html = render(validate(v));
+  assert.match(html, /<span>最新值<\/span><span>涨跌幅<\/span>/);
+  assert.match(html, /v2-market-value"><strong>123\.45<\/strong>/);
+  assert.match(html, /v2-market-direction[^>]*><strong>−1\.25%<\/strong>/);
+  assert.doesNotMatch(html, /v2-meter-dot|aria-label="强度|<span>强度<\/span>/);
+});
+test('valuation is inline, scoped, formula-checked and shares the Python projection', () => {
+  const v = snapshot();
+  const row = v.daily.positions_plans.items[0]!;
+  row.valuation = { symbol: row.symbol, instrument_type: 'company', as_of: '2026-08-31T10:00:00Z', pe_ttm: '20', roe_pct: '20', roe_period_end: '2025-12-31', roe_period_label: 'FY 2025', roe_basis: 'annual', roe_quality: 'positive_income_equity', pr: '1.00000000', status: 'available', gap: '', source: 'Longbridge' };
+  const admitted = validate(v), html = render(admitted);
+  assert.match(html, /市赚率 <b>1\.00<\/b>/);
+  assert.match(html, /ROE <b>20\.00%<\/b> · FY 2025/);
+  assert.equal(normalized(html), normalized(pythonRender(admitted)));
+  row.valuation.pr = '100';
+  assert.throws(() => validate(v));
+  row.valuation.pr = '1.00000000'; row.valuation.symbol = 'UNRELATED.US';
+  assert.throws(() => validate(v));
+});
+test('actual leveraged-ETF symbol, underlying and observation asset stay auditable', () => {
+  const v: any = snapshot();
+  const row = v.daily.positions_plans.items[0];
+  row.symbol = 'NVDL.US'; row.display_name = 'NVDL'; row.valuation = null;
+  row.instrument = { tool_kind: 'single_stock_leveraged_etf', underlying: 'NVDA.US' };
+  row.execution_context = {
+    tool_kind: 'single_stock_leveraged_etf', trade_symbol: 'NVDL.US',
+    observation_symbol: 'NVDA.US', observation_timeframe: '1D',
+    trigger_timeframe: '1D', trigger_basis: 'bar_close', exception_note: null,
+  };
+  row.plan_detail = JSON.parse(python("import sys,json; sys.path.insert(0,'tests'); from test_render_trade_review_dashboard_v2 import plan_detail; print(json.dumps(plan_detail()))")) as PlanDetail;
+  row.plan_detail.underlying = 'NVDA.US'; row.plan_detail.execution_context = structuredClone(row.execution_context);
+  row.plan_detail.evidence.symbol = 'NVDA.US'; row.plan_detail.evidence.period = '1D';
+  v.weekly.review_episodes = [{
+    market_date: '2026-08-28', trade_symbol: 'NVDL.US', underlying: 'NVDA.US',
+    tool_kind: 'single_stock_leveraged_etf', side: 'buy', plan_id: null,
+    plan_version: null, observation_timeframe: '1D', trigger_timeframe: '1D',
+    trigger_basis: 'bar_close', coverage_status: 'uncovered',
+    compliance_status: 'unassessable', outcome_status: 'unverifiable',
+    deviation_type: null, reason: '事前计划待确认', next_rule: '先确认计划', data_status: 'partial',
+  }];
+  Object.assign(v.weekly.execution_metrics, {
+    eligible_episode_count: 1, covered_episode_count: 0, assessable_episode_count: 0,
+    compliant_episode_count: 0, resolved_episode_count: 0, successful_episode_count: 0,
+    open_episode_count: 0, flat_episode_count: 0, unverifiable_episode_count: 1,
+    review_needed_count: 1, coverage_rate: 0, execution_rate: null, plan_win_rate: null,
+    data_status: 'partial', gap: '计划与周期待确认',
+  });
+  const admitted = validate(v), html = render(admitted);
+  assert.match(html, /实际交易对象：NVDL/);
+  assert.match(html, /观察对象：NVDA/);
+  assert.equal(normalized(html), normalized(pythonRender(admitted)));
+  const wrongCompany = structuredClone(v);
+  wrongCompany.daily.positions_plans.items[0].instrument.underlying = 'TSLA.US';
+  assert.throws(() => validate(wrongCompany));
+});

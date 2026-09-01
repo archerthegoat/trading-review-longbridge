@@ -9,6 +9,7 @@ async function main() {
   const { positionals, values } = parseArgs({ allowPositionals: true, options: {
     'daily-input': { type: 'string' }, 'display-input': { type: 'string' },
     'weekly-input': { type: 'string' }, 'weekly-key': { type: 'string' }, route: { type: 'string' },
+    'enrich-db': { type: 'boolean' },
     lock: { type: 'string' }, nonce: { type: 'string' },
   } });
   const [command] = positionals;
@@ -19,7 +20,7 @@ async function main() {
   if (!['publish', 'recover-lock'].includes(command!) && Object.keys(values).length) throw new Error('options_only_for_publish_or_recovery');
   const store = new PublicationStore(undefined, { create: command === 'publish' });
   let result: unknown;
-  if (command === 'publish') { const p = prepare(store, { dailyInput: values['daily-input'], displayInput: values['display-input'], weeklyInput: values['weekly-input'], weeklyKey: values['weekly-key'] }); result = store.publish(p.view, { route: values.route, expectedCurrent: p.current }); }
+  if (command === 'publish') { const p = prepare(store, { dailyInput: values['daily-input'], displayInput: values['display-input'], weeklyInput: values['weekly-input'], weeklyKey: values['weekly-key'], enrichDb: values['enrich-db'] }); result = store.publish(p.view, { route: values.route, expectedCurrent: p.current }); }
   else if (command === 'rebuild') { const current = store.index().current; result = store.publish(store.load(current).view, { expectedCurrent: current }); }
   else if (command === 'rollback') result = store.rollback();
   else if (command === 'install') result = install(store);

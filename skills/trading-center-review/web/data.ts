@@ -4,7 +4,7 @@ import type { DisplaySnapshot, Weekly } from './types.ts';
 
 export const PYTHON = '/usr/bin/python3';
 const ADAPTER = fileURLToPath(new URL('../scripts/trading_review_display.py', import.meta.url));
-export function dataOperation(operation: 'validate' | 'project' | 'weekly' | 'weekly-db', input: unknown | Buffer): unknown {
+export function dataOperation(operation: 'validate' | 'project' | 'weekly' | 'weekly-db' | 'enrich-db', input: unknown | Buffer): unknown {
   const result = spawnSync(PYTHON, ['-E', '-s', '-B', ADAPTER, operation], {
     input: Buffer.isBuffer(input) ? input : JSON.stringify(input), encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024, timeout: 15000,
@@ -17,3 +17,4 @@ export const validate = (value: unknown): DisplaySnapshot => dataOperation('vali
 export const project = (daily: unknown, weekly: unknown): DisplaySnapshot => dataOperation('project', { daily, weekly }) as DisplaySnapshot;
 export const weeklyData = (value: unknown): Weekly => dataOperation('weekly', value) as Weekly;
 export const weeklyFromDatabase = (review_key: string): Weekly => dataOperation('weekly-db', { review_key }) as Weekly;
+export const enrichFromDatabase = (value: unknown): DisplaySnapshot => dataOperation('enrich-db', value) as DisplaySnapshot;

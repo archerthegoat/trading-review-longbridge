@@ -331,7 +331,7 @@ class StateStoreTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 )
             }
-        self.assertEqual(version, 3)
+            self.assertEqual(version, STATE.SCHEMA_VERSION)
         self.assertEqual(stat.S_IMODE(self.state_dir.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(self.db_path.stat().st_mode), 0o600)
         self.assertTrue(
@@ -359,6 +359,158 @@ class StateStoreTests(unittest.TestCase):
                 "weekly_execution_metrics",
             }.issubset(tables)
         )
+
+    def test_instrument_facts_are_hash_bound_and_full_option_identity_is_rejected(self) -> None:
+        rows = trade_rows()
+        rows[0]["instrument"] = {"tool_kind": "stock", "underlying": "DEMO.US"}
+        with self.open_store() as store:
+            result = store.ingest_partition(
+                dataset="trades", period_start="2026-08-28", period_end="2026-08-28",
+                contract_version="source.v2:trades", status="complete",
+                collected_at="2026-08-29T08:00:00+08:00", payload=rows,
+            )
+            readback = store.get_trade_partition_snapshot("2026-08-28", "2026-08-28", "source.v2:trades")
+            self.assertEqual(readback["payload"], STATE._normalize_payload("trades", rows, "complete"))
+            self.assertEqual(result.payload_hash, readback["payload_hash"])
+            self.assertEqual(store.table_count("trade_instrument_facts"), 1)
+        forged = trade_rows()
+        forged[0]["symbol"] = "DEMO.US260101C00100000"
+        with self.open_store() as store:
+            with self.assertRaises(STATE.StateContractError):
+                store.ingest_partition(
+                    dataset="trades", period_start="2026-08-28", period_end="2026-08-28",
+                    contract_version="source.v2:trades", status="complete",
+                    collected_at="2026-08-29T09:00:00+08:00", payload=forged,
+                )
+
+    def test_legacy_weekly_underlying_rejects_compact_option_identity(self) -> None:
+        attribution = {
+            "underlying": "DEMO260101C00100000.US", "instrument_group": "combined",
+            "display_name": "不应显示", "profit": "0", "underlying_profit": "0",
+            "derivatives_profit": "0", "currency": "USD", "data_status": "complete",
+        }
+        with self.assertRaises(STATE.StateContractError):
+            STATE._normalize_weekly_attribution(attribution, "$legacy.attribution")
+        episode = {
+            "market_date": "2026-08-28", "underlying": "DEMO260101C00100000.US",
+            "side": "buy", "plan_id": None, "plan_version": None,
+            "coverage_status": "uncovered", "compliance_status": "unassessable",
+            "outcome_status": "unverifiable", "deviation_type": None,
+            "reason": "无事前计划", "next_rule": "先确认计划", "data_status": "partial",
+        }
+        with self.assertRaises(STATE.StateContractError):
+            STATE._normalize_episode_assessment(episode, "$legacy.episode")
+
+    def test_contract_identity_is_rejected_from_plan_episode_and_analysis_text(self) -> None:
+        contract = "DEMO260101C00100000.US"
+        lower_contract = contract.lower()
+
+        zone_plan = plan_state()
+        zone_plan["zones"][0]["condition"] = f"观察 {contract}"
+        with self.assertRaisesRegex(STATE.StateContractError, "option contract identity"):
+            STATE.normalize_plan_version(zone_plan)
+
+        context_plan = plan_state()
+        context_plan["schema_version"] = "trading-plan-state.v2"
+        context_plan["evidence"].update(symbol="DEMO.US", period="1D")
+        context_plan["execution_context"] = {
+            "tool_kind": "stock",
+            "trade_symbol": "DEMO.US",
+            "observation_symbol": "DEMO.US",
+            "observation_timeframe": "1D",
+            "trigger_timeframe": "1D",
+            "trigger_basis": "bar_close",
+            "exception_note": f"不要记录 {contract}",
+        }
+        with self.assertRaisesRegex(STATE.StateContractError, "contract identity"):
+            STATE.normalize_plan_version(context_plan)
+
+        episode = {
+            "market_date": "2026-08-28", "underlying": "DEMO.US", "side": "buy",
+            "plan_id": None, "plan_version": None, "coverage_status": "uncovered",
+            "compliance_status": "unassessable", "outcome_status": "unverifiable",
+            "deviation_type": None, "reason": f"误用了 {contract}",
+            "next_rule": "先确认计划", "data_status": "partial",
+        }
+        with self.assertRaisesRegex(STATE.StateContractError, "option contract identity"):
+            STATE._normalize_episode_assessment(episode, "$episode")
+
+        analysis = {
+            "headline": f"核对 {contract}",
+            "facts": [], "interpretation": [], "risks": [], "checks": [], "gaps": [],
+        }
+        with self.open_store() as store:
+            with self.assertRaisesRegex(STATE.StateContractError, "option contract identity"):
+                store.put_analysis(
+                    "facts-a", "plan-a", "analysis.v1", analysis, "codex",
+                    "2026-08-29T08:00:00+08:00", "complete",
+                )
+            self.assertEqual(store.table_count("analysis_snapshots"), 0)
+
+        lower_plan = plan_state()
+        lower_plan["zones"][0]["condition"] = f"观察 {lower_contract}"
+        with self.assertRaisesRegex(STATE.StateContractError, "option contract identity"):
+            STATE.normalize_plan_version(lower_plan)
+        self.assertFalse(STATE.instruments.contains_contract_identity("a" * 52 + "260101c00100"))
+
+    def test_unknown_instrument_cannot_bind_an_unrelated_symbol(self) -> None:
+        with self.assertRaises(STATE.instruments.InstrumentContractError):
+            STATE.instruments.normalize_instrument(
+                {"tool_kind": "unknown", "underlying": "DEMO.US"},
+                "OTHER.US",
+            )
+        self.assertEqual(
+            STATE.instruments.normalize_instrument(
+                {"tool_kind": "unknown", "underlying": "DEMO.US"},
+                "DEMO.US",
+            )["underlying"],
+            "DEMO.US",
+        )
+
+    def test_current_schema_audit_rejects_contract_identity_hidden_in_free_text(self) -> None:
+        with self.open_store() as store:
+            store.connection.execute(
+                "INSERT INTO analysis_snapshots VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "a" * 64, "b" * 64, "analysis.v1",
+                    '{"headline":"demo260101c00100000.us"}',
+                    "codex", "2026-08-29T08:00:00+08:00", "complete",
+                ),
+            )
+        with self.assertRaisesRegex(STATE.StateMigrationError, "option-identity privacy"):
+            self.open_store()
+
+    def test_weekly_v3_keeps_stock_and_leap_as_two_instrument_episodes(self) -> None:
+        rows = [
+            {**trade_rows()[0], "instrument": {"tool_kind": "stock", "underlying": "DEMO.US"}},
+            {**trade_rows()[0], "symbol": "DEMO.US:OPTION", "instrument": {"tool_kind": "leap_call", "underlying": "DEMO.US"}},
+        ]
+        with self.open_store() as store:
+            partition = store.ingest_partition(
+                dataset="trades", period_start="2026-08-28", period_end="2026-08-28",
+                contract_version="source.v2:trades", status="complete",
+                collected_at="2026-08-29T08:00:00+08:00", payload=rows,
+            )
+            store.start_run(
+                run_id="weekly-run", mode="weekly", period_start="2026-08-24", period_end="2026-08-28",
+                started_at="2026-08-30T08:00:00+08:00", data_status="complete", source_contract_version="source.v1",
+            )
+            dependency = {"dataset": "trades", "period_start": "2026-08-28", "period_end": "2026-08-28", "contract_version": "source.v2:trades", "partition_revision": partition.revision, "payload_hash": partition.payload_hash}
+            bundle = weekly_v2_bundle(dependency)
+            bundle["schema_version"] = "trading-review-weekly-state.v3"
+            bundle["episode_assessments"] = [
+                {"market_date": "2026-08-28", "trade_symbol": symbol, "underlying": "DEMO.US", "tool_kind": tool,
+                 "side": "buy", "plan_id": None, "plan_version": None, "observation_timeframe": None,
+                 "trigger_timeframe": None, "trigger_basis": "unconfirmed", "coverage_status": "uncovered",
+                 "compliance_status": "unassessable", "outcome_status": "unverifiable", "deviation_type": None,
+                 "reason": "事前工具计划缺失", "next_rule": "先确认工具和周期", "data_status": "partial"}
+                for symbol, tool in (("DEMO.US", "stock"), ("DEMO.US:OPTION", "leap_call"))
+            ]
+            result = store.ingest_weekly_review(bundle)
+            review = store.get_weekly_review(bundle["review_key"], result.revision)
+            self.assertEqual(review["execution_basis"]["contract_version"], "instrument-episode.v1")
+            self.assertEqual({row["tool_kind"] for row in review["episode_assessments"]}, {"stock", "leap_call"})
+            self.assertEqual(review["execution_metrics"]["eligible_episode_count"], 2)
 
     def test_schema_has_no_generic_raw_or_metadata_escape_column(self) -> None:
         with self.open_store() as store:
@@ -819,6 +971,71 @@ class StateStoreTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
 
+    def test_v5_migration_blocks_legacy_compact_option_identity_without_rewrite(self) -> None:
+        self.state_dir.mkdir(mode=0o700)
+        with sqlite3.connect(self.db_path) as connection:
+            for schema in (
+                STATE.SCHEMA_V1_SQL, STATE.SCHEMA_V2_SQL,
+                STATE.SCHEMA_V3_SQL, STATE.SCHEMA_V4_SQL,
+            ):
+                for statement in schema.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_meta VALUES (1, 4, '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z')"
+            )
+            connection.execute(
+                "INSERT INTO trade_aggregates VALUES ('2026-08-28','DEMO260101C00100000.US','buy',1,1,1,'1','complete')"
+            )
+            connection.execute("PRAGMA user_version=4")
+        self.db_path.chmod(0o600)
+
+        with self.assertRaises(STATE.StateMigrationError) as raised:
+            self.open_store()
+        self.assertIsInstance(raised.exception.__cause__, STATE.StateMigrationError)
+        self.assertIn("option-identity privacy", str(raised.exception.__cause__))
+        with sqlite3.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(
+                connection.execute("SELECT symbol FROM trade_aggregates").fetchone()[0],
+                "DEMO260101C00100000.US",
+            )
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("weekly_execution_bases", tables)
+
+    def test_v5_migration_blocks_compact_option_identity_in_legacy_plan_text(self) -> None:
+        self.state_dir.mkdir(mode=0o700)
+        with sqlite3.connect(self.db_path) as connection:
+            for schema in (
+                STATE.SCHEMA_V1_SQL, STATE.SCHEMA_V2_SQL,
+                STATE.SCHEMA_V3_SQL, STATE.SCHEMA_V4_SQL,
+            ):
+                for statement in schema.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_meta VALUES (1, 4, '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z')"
+            )
+            connection.execute(
+                "INSERT INTO plan_zones VALUES "
+                "('plan-demo',1,0,'observation','95','97','USD',?, 'ema20', 'complete')",
+                ("观察 DEMO260101C00100000.US",),
+            )
+            connection.execute("PRAGMA user_version=4")
+        self.db_path.chmod(0o600)
+
+        with self.assertRaises(STATE.StateMigrationError) as raised:
+            self.open_store()
+        self.assertIn("option-identity privacy", str(raised.exception.__cause__))
+        with sqlite3.connect(self.db_path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+            self.assertEqual(
+                connection.execute("SELECT condition FROM plan_zones").fetchone()[0],
+                "观察 DEMO260101C00100000.US",
+            )
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("weekly_execution_bases", tables)
+
     def test_partial_ddl_failure_does_not_leave_half_migrated_schema(self) -> None:
         self.state_dir.mkdir(mode=0o700)
         with sqlite3.connect(self.db_path) as connection:
@@ -854,7 +1071,7 @@ class StateStoreTests(unittest.TestCase):
             connection.execute("PRAGMA user_version=1")
         self.db_path.chmod(0o600)
         with self.open_store() as store:
-            self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], STATE.SCHEMA_VERSION)
             self.assertEqual(store.table_count("runs"), 1)
             self.assertEqual(store.table_count("weekly_reviews"), 0)
             self.assertEqual(store.table_count("plan_versions"), 0)
@@ -920,7 +1137,7 @@ class StateStoreTests(unittest.TestCase):
         self.db_path.chmod(0o600)
 
         with self.open_store() as store:
-            self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], STATE.SCHEMA_VERSION)
             self.assertEqual(store.table_count("runs"), 1)
             self.assertEqual(store.table_count("weekly_reviews"), 1)
             self.assertEqual(store.table_count("plan_versions"), 0)

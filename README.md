@@ -6,7 +6,7 @@
 
 ## 本地常驻 UI
 
-已批准启用时，用正式发布入口将同一日/周 V2 保存到 Git/Vault 外的 owner-only 展示目录，地址为 `http://127.0.0.1:8765/`。用户级 LaunchAgent 在登录后启动；关闭 Codex 不会关掉页面服务。原 SQLite 不迁移，周度不随每日重新计算，页面生成、发布和常驻 HTTP 现由 TypeScript 实现，Python/SQLite 保留为数据边界。Obsidian 是确认后由知识中心接收的独立单向桥接，不是网页写接口；其准确 Schema/模板门禁见新架构报告。
+已批准启用时，用正式发布入口将同一日/周 V2 保存到 Git/Vault 外的 owner-only 展示目录，地址为 `http://127.0.0.1:8765/`。用户级 LaunchAgent 在登录后启动；关闭 Codex 不会关掉页面服务。SQLite 迁移只追加白名单表，周度不随每日重新计算，页面生成、发布和常驻 HTTP 现由 TypeScript 实现，Python/SQLite 保留为数据边界。持久估值通过 `publish --enrich-db` 直读 SQLite 后重建，不依赖临时页面。Obsidian 是确认后由知识中心接收的独立单向桥接，不是网页写接口；其准确 Schema/模板门禁见新架构报告。
 
 完整决策与验收见 [TS 与 Obsidian 架构报告](docs/architecture/ts-web-and-obsidian-bridge.md)。发布、重建、安装、状态、启停和回滚命令见 [本地展示服务指引](skills/trading-center-review/references/local-web-service.md)。常驻只保证服务入口，不等于数据自动更新或人工验收通过。
 
@@ -36,6 +36,7 @@ npx skills add archerthegoat/trading-review-longbridge \
 - `scripts/render_trade_review_dashboard.py`：V1 回滚 renderer。
 - `scripts/render_trade_review_dashboard_v2.py`：V2 严格 Schema、隐私和离线 renderer。
 - `scripts/construct_trade_plan.py` 与 `trade_plan_lifecycle.py`：Longbridge EMA 条件式区间、不可变草案/确认版本与原每日计划卡片衔接。
+- `scripts/trading_review_instruments.py`：实际工具、交易/观察标的、判断/触发周期与跨工具匹配的唯一规则边界。
 - `assets/`：不含真实数据的模板。
 - `tests/`：V1/V2、状态内核、增量 runner 和失败门禁测试。
 - `docs/architecture/trading-center-skill-incremental-state.md`：已批准架构、迁移、回滚和人工验收合同。
@@ -94,7 +95,7 @@ python3 skills/trading-center-review/scripts/run_incremental_review.py weekly-pl
   --output /private/tmp/trading-center-review-runtime/2026-08-29/run-id/weekly-plan.json
 ~~~
 
-周度执行证据仍须在获授权运行中核验；SQLite v3 保存计划、episode 分类和机械执行指标，不把旧周报当成下一周数据源。新周度输入不包含账户/P&L 模块，旧表只保留历史。固定链路为：
+周度执行证据仍须在获授权运行中核验；SQLite 保存计划、episode 分类和机械执行指标（v3 起；当前追加至 v5），不把旧周报当成下一周数据源。工具级新周度状态为 v3，旧 underlying 级 v2 只做兼容；两者都不包含账户/P&L 模块，旧表只保留历史。固定链路为：
 
 ~~~bash
 python3 skills/trading-center-review/scripts/project_weekly_review.py \
@@ -134,4 +135,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 
 W35 首个历史周度 revision 的状态保持 `partial / current / pending`；缺少事前计划，不能回填执行率或胜率。v3 单页合并、数据库迁移回读与 Browser 证据以 [权威架构报告](docs/architecture/trading-center-skill-incremental-state.md) 为准。旧自动化和 V1 回滚线不变；新实现的用户浏览器 PASS 与自动化切换仍为 PENDING。
 
-本分支不自动 push、PR、merge、发布、修改自动化、创建生产数据库或清理私有数据。每项外部状态变化都需要单独授权。
+2026-09-01 补充：同一套桌面 TS UI 的限定标的市赚率、雷达数值、管理原则及工具/观察周期兼容已部署到 `8765`；v5 追加迁移已备份并验证旧表逻辑内容不变。市赚率由发布入口直读 SQLite，不再依赖临时页面。确认版 Obsidian 单向 Bridge 接收器已安装在 Vault 外；尚未入队真实确认包或同步真实日记。197 项 Python、22 项 TS、类型检查和 Skill 校验通过，内置 Browser 自动读回通过；人工 UI/Bridge 验收仍为 PENDING。当前边界、回滚和清单见 [TS 与 Obsidian 报告第 10—11 节](docs/architecture/ts-web-and-obsidian-bridge.md#10-本次批准的实施边界与补充契约)。
+
+本分支不自动 push、PR、merge、修改自动化或清理私有数据。上述本地发布、数据库迁移与接收器安装均来自本次明确授权；其他外部状态变化仍需单独授权。

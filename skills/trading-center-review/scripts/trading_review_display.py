@@ -47,12 +47,16 @@ def adapt(operation, value):
             if packet["meta"].get("market_scope") != "US":
                 raise ValueError("DB weekly display lacks verified US scope; retain the published weekly projection")
             return packet
+    if operation == "enrich-db":
+        import trading_review_state as state
+        with state.read_state_store() as store:
+            return dashboard.enrich_display_from_state(value, store)
     raise ValueError("unsupported data operation")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("validate", "project", "weekly", "weekly-db"))
+    parser.add_argument("operation", choices=("validate", "project", "weekly", "weekly-db", "enrich-db"))
     args = parser.parse_args()
     try:
         raw = sys.stdin.buffer.read(LIMIT + 1)

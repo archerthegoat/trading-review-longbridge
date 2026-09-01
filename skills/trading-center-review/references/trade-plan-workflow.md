@@ -6,9 +6,11 @@
 
 Longbridge `kline history` 是唯一来源；能力、字段、复权与已完成日线语义必须实机核验。整轮最多 20 个当前持仓/已确认候选，每标的最多 550 自然日。失败不安装、不换 provider，也不让 Codex 猜价格。
 
-`construct_trade_plan.py` 消费私有 `trading-plan-request.v1`：计划元数据/用户约束、source、bars，以及仅持仓管理使用的父计划/已验证买入派生键。完整固定字段由脚本校验，未知字段拒绝。
+`construct_trade_plan.py` 保留私有 `trading-plan-request.v1` 历史入口；新计划使用 `trading-plan-request.v2`，额外绑定 execution_context 与 source.symbol。完整固定字段由脚本校验，未知字段拒绝。
 
 - source：Longbridge、kline history、1D、America/New_York、forward/backward、requested_start/end、as_of。
+- execution_context：正股/单股杠杆 ETF/LEAP Call、实际交易 symbol、观察 symbol、1H/4H/1D/1W 主周期、触发周期与收线/盘中口径。工具或口径待确认时不能确认计划；周期不同必须把例外写进同一草案。事实与计划关联必须同时匹配实际 symbol、tool_kind 和 underlying，不能只按 ticker 或公司名合入。
+- 自动区间当前仍只接受 observation_symbol 与 source.symbol 相同、主观察周期为 1D 的已完成日线。其他周期可以留作待确认展示，但不会把日线结果换标签使用。输入包中的 provider/period 属于采集适配器声明；计算器可校验日序、完成标志、窗口与内容 hash，不能从 OHLCV 数值反向证明远端调用身份。
 - bars：timestamp、open、high、low、close、volume、is_complete；时间和纽约市场日期必须唯一递增且在窗口内。
 - 最多移除一根末尾未完成日线，之后至少 319 根；as_of 必须等于最后完成日，生成时距其不超过五个自然日。
 - EMA20/50/200 以对应前 N 根均值初始化后递推；这里的均值只用于 EMA 初始化，不是 SMA 信号。
@@ -38,7 +40,7 @@ python3 skills/trading-center-review/scripts/trade_plan_lifecycle.py save-draft 
   --output /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/plan-saved.json
 ~~~
 
-保存前重算 content_hash，投影只保留 SQLite 白名单。技术证据不合格的 blocked 工件不写成计划。初次必须 v1 draft；新内容追加 draft，不覆盖旧版本。
+保存前重算 content_hash，投影只保留 SQLite 白名单。技术证据不合格的 blocked 工件不写成计划。计划首次版本号必须为 1；新计划使用带 execution_context 的 v2 schema，旧 v1 仅作历史兼容。新内容追加 draft，不覆盖旧版本。
 
 展示具体草案内容、价格区间、失效和到期、version/hash。只有用户明确确认这一个草案后，才执行：
 
@@ -52,7 +54,7 @@ python3 skills/trading-center-review/scripts/trade_plan_lifecycle.py confirm \
 
 确认追加下一版本，保留原始内容 hash、证据和区间。`--user-confirmed` 不是绕过门禁的默认选项；实施授权、复盘确认、此前其他版本的确认都不能代替本次确认。新 CLI 确认时间必须处于当前时钟前五分钟内，禁止倒填或未来时间；只有已落库的精确版本/hash/确认时间重放可跳过当前时钟检查。
 
-持仓管理必须引用 confirmed pre_entry 父版本及 `market_date|underlying|buy` 派生键。状态层会查验最新完整日分区、执行数量与 payload hash，确认买入证据先于草案；不能用布尔值或持仓快照替代买入事实。加仓草案须再次单独确认。
+持仓管理必须引用同一实际工具的 confirmed pre_entry 父版本及 `market_date|actual_trade_symbol|buy` 派生键。状态层会查验最新完整日分区、工具事实、执行数量与 payload hash，确认买入证据先于草案；公司正股成交不能替 ETF/LEAP 提供加仓资格，也不能用布尔值或持仓快照替代买入事实。加仓草案须再次单独确认。
 
 ~~~bash
 python3 skills/trading-center-review/scripts/trade_plan_lifecycle.py enrich-daily \
@@ -61,7 +63,7 @@ python3 skills/trading-center-review/scripts/trade_plan_lifecycle.py enrich-dail
   --output /private/tmp/trading-center-review-runtime/<run-date>/<run-id>/daily-with-plan.json
 ~~~
 
-只合入已有标的行，不新建页面或重排每日结构。可选 `--quote-input` 接收固定 Longbridge source/price/as_of/data_status，来源状态必须已由采集端按交易时段和 cutoff 验证。报价只改变 below/inside/above/stale/unavailable，旧区间和计划 hash 不变。到期只派生显示，不静默改数据库。
+只合入已有实际交易对象行，不新建页面或重排每日结构；同一行显示脱敏实际交易对象、观察对象和判断周期。可选 `--quote-input` 接收固定 Longbridge source/price/as_of/data_status，来源状态必须已由采集端按交易时段和 cutoff 验证。报价只改变 below/inside/above/stale/unavailable，旧区间和计划 hash 不变。到期只派生显示，不静默改数据库。
 
 ## 不完整结果
 

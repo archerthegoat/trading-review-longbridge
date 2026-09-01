@@ -26,7 +26,8 @@ INPUT_SCHEMA = "trading-review-incremental-input.v1"
 FACTS_INPUT_SCHEMA = "trading-review-incremental-facts.v1"
 ANALYSIS_PLAN_SCHEMA = "trading-review-analysis-plan.v1"
 MANIFEST_SCHEMA = "trading-review-run-manifest.v1"
-WEEKLY_STATE_SCHEMA = "trading-review-weekly-state.v2"
+WEEKLY_STATE_SCHEMA = "trading-review-weekly-state.v2"  # legacy fixture/API alias
+WEEKLY_STATE_SCHEMAS = frozenset({WEEKLY_STATE_SCHEMA, "trading-review-weekly-state.v3"})
 WEEKLY_MANIFEST_SCHEMA = "trading-review-weekly-state-manifest.v1"
 PLAN_SCHEMA = "trading-review-collection-plan.v1"
 PRIVATE_ROOT = Path("/private/tmp/trading-center-review-runtime").resolve()
@@ -69,6 +70,8 @@ def _text(value: Any, path: str) -> str:
         raise RunnerContractError(f"{path} must be a non-empty string")
     if state.SENSITIVE_VALUE_RE.search(value):
         raise RunnerContractError(f"{path} contains a forbidden sensitive value")
+    if state.instruments.contains_contract_identity(value):
+        raise RunnerContractError(f"{path} contains option contract identity")
     return value.strip()
 
 
@@ -363,7 +366,7 @@ def process_daily_bundle(store: state.StateStore, bundle: Any) -> Dict[str, Any]
         raise RunnerContractError(
             "analysis cache hit must reuse the original model, status, generated_at, and output"
         )
-    store.start_run(
+    run_action = store.start_run(
         run_id=validated["run_id"],
         mode="daily",
         period_start=validated["review_date"],
@@ -372,6 +375,19 @@ def process_daily_bundle(store: state.StateStore, bundle: Any) -> Dict[str, Any]
         data_status=data_status,
         source_contract_version=validated["source_contract_version"],
     )
+    existing_run = store.get_run(validated["run_id"])
+    if run_action == "reused" and existing_run["finished_at"] is not None:
+        from review_journal_state import assert_daily_source_recovery
+        assert_daily_source_recovery(store, {
+            "run_id": validated["run_id"],
+            "review_period": {"start": validated["review_date"], "end": validated["review_date"]},
+            "generated_at": validated["generated_at"],
+            "data_status": data_status,
+            "source_contract_version": validated["source_contract_version"],
+            "analysis_contract_version": validated["analysis_contract_version"],
+            "facts_hash": facts_hash,
+            "plan_hash": validated["plan_hash"],
+        })
 
     results: Dict[str, Any] = {}
     for name in DAILY_MODULES:
@@ -402,7 +418,7 @@ def process_daily_bundle(store: state.StateStore, bundle: Any) -> Dict[str, Any]
         analysis["status"],
     )
     store.finish_run(validated["run_id"], validated["generated_at"], data_status)
-    return {
+    manifest = {
         "schema_version": MANIFEST_SCHEMA,
         "run_id": validated["run_id"],
         "mode": "daily",
@@ -423,13 +439,16 @@ def process_daily_bundle(store: state.StateStore, bundle: Any) -> Dict[str, Any]
         },
         "artifacts": [],
     }
+    from review_journal_state import record_daily_source
+    record_daily_source(store, manifest)
+    return manifest
 
 
 def process_weekly_bundle(store: state.StateStore, bundle: Any) -> Dict[str, Any]:
     """Persist one already-sanitized weekly projection and emit lineage only."""
 
     validated = state.normalize_weekly_review_bundle(bundle)
-    if validated["schema_version"] != WEEKLY_STATE_SCHEMA:
+    if validated["schema_version"] not in WEEKLY_STATE_SCHEMAS:
         raise RunnerContractError("unsupported weekly state schema")
     run = store.get_run(validated["run_id"])
     if run is None:
@@ -949,8 +968,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             input_path = _private_path(args.input, "input", require_existing=True)
             bundle = json.loads(input_path.read_text(encoding="utf-8"))
             normalized_weekly = state.normalize_weekly_review_bundle(bundle)
-            if normalized_weekly["schema_version"] != WEEKLY_STATE_SCHEMA:
-                raise RunnerContractError("new weekly runs require the plan-execution v2 contract")
+            if normalized_weekly["schema_version"] not in WEEKLY_STATE_SCHEMAS:
+                raise RunnerContractError("new weekly runs require the plan-execution v2/v3 contract")
             manifest_path = _private_path(args.manifest, "manifest")
         elif args.command == "daily-analysis-plan":
             input_path = _private_path(args.input, "input", require_existing=True)

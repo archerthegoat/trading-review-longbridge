@@ -19,6 +19,18 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+try:
+    import trading_review_instruments as instruments
+except ModuleNotFoundError:
+    import importlib.util
+    _instrument_spec = importlib.util.spec_from_file_location(
+        "trading_review_instruments", Path(__file__).with_name("trading_review_instruments.py")
+    )
+    if _instrument_spec is None or _instrument_spec.loader is None:
+        raise
+    instruments = importlib.util.module_from_spec(_instrument_spec)
+    _instrument_spec.loader.exec_module(instruments)
+
 
 SCHEMA_VERSION = "trading-review-dashboard.v2"
 WEEKLY_SCHEMA_VERSION = "trading-review-weekly-dashboard.v2"
@@ -146,7 +158,7 @@ RFC3339_RE = re.compile(
 )
 WEEKLY_OPTION_IDENTITY_RE = re.compile(
     r"(?::OPTION\b|\b(?:strike|expiry|expiration)\b|行权价|到期日|"
-    r"\b\d{4}-\d{2}-\d{2}\s+(?:call|put)\b)",
+    r"\b\d{4}-\d{2}-\d{2}\s+(?:call|put)\b|\d{6,8}[CP]\d+)",
     re.IGNORECASE,
 )
 NY_TZ = ZoneInfo("America/New_York")
@@ -216,6 +228,8 @@ def _text(value: Any, path: str, required: bool = True) -> str:
         raise DashboardRenderError(f"{path} must be a string")
     if required and not value.strip():
         raise DashboardRenderError(f"{path} must not be empty")
+    if instruments.contains_contract_identity(value):
+        raise DashboardRenderError(f"{path} contains option contract identity")
     return value
 
 
@@ -819,10 +833,12 @@ def _validate_plan_detail(value: Any, path: str) -> Dict[str, Any]:
     keys = {
         "plan_id", "version", "plan_stage", "plan_status", "setup_type",
         "evidence", "zones", "parent_plan_id", "parent_plan_version",
-        "initial_buy_episode_key", "quote_relation",
+        "initial_buy_episode_key", "quote_relation", "execution_context",
+        "underlying",
     }
+    required = keys - {"execution_context", "underlying"}
     _reject_unknown(item, keys, path)
-    _required_keys(item, keys, path)
+    _required_keys(item, required, path)
     _text(item["plan_id"], f"{path}.plan_id")
     version = _integer(item["version"], f"{path}.version")
     if version < 1:
@@ -846,9 +862,18 @@ def _validate_plan_detail(value: Any, path: str) -> Dict[str, Any]:
             raise DashboardRenderError("position_management parent version must be positive")
         _text(item["initial_buy_episode_key"], f"{path}.initial_buy_episode_key")
     _enum(item["quote_relation"], {"below", "inside", "above", "stale", "unavailable"}, f"{path}.quote_relation")
+    if "execution_context" in item:
+        if "underlying" not in item:
+            raise DashboardRenderError(f"{path}.underlying is required with execution context")
+        try:
+            instruments.normalize_context(item["execution_context"], underlying=item["underlying"], ready=status in {"confirmed", "expired"})
+        except (instruments.InstrumentContractError, KeyError) as exc:
+            raise DashboardRenderError(f"{path}.execution_context is invalid") from exc
 
     evidence = _object(item["evidence"], f"{path}.evidence")
     evidence_keys = {"evidence_id", "source", "as_of", "timezone", "adjustment", "bars_used", "atr14"}
+    if "execution_context" in item:
+        evidence_keys |= {"symbol", "period"}
     _reject_unknown(evidence, evidence_keys, f"{path}.evidence")
     _required_keys(evidence, evidence_keys, f"{path}.evidence")
     if not re.fullmatch(r"[0-9a-f]{64}", _text(evidence["evidence_id"], f"{path}.evidence.evidence_id")):
@@ -861,6 +886,8 @@ def _validate_plan_detail(value: Any, path: str) -> Dict[str, Any]:
         raise DashboardRenderError("plan evidence requires at least 319 completed daily bars")
     if _float_decimal(evidence["atr14"], f"{path}.evidence.atr14") <= 0:
         raise DashboardRenderError("plan ATR14 must be positive")
+    if "execution_context" in item and (evidence["symbol"] != item["execution_context"]["observation_symbol"] or evidence["period"] != item["execution_context"]["observation_timeframe"]):
+        raise DashboardRenderError("plan technical evidence must match its observation asset and timeframe")
 
     zones = _array(item["zones"], f"{path}.zones")
     zone_kinds = []
@@ -930,6 +957,9 @@ def _validate_positions_plans(value: Any) -> Dict[str, Any]:
                 "data_status",
                 "plan_detail",
                 "strategy_category",
+                "valuation",
+                "instrument",
+                "execution_context",
             },
             row_path,
         )
@@ -967,6 +997,20 @@ def _validate_positions_plans(value: Any) -> Dict[str, Any]:
             _text(row[key], f"{row_path}.{key}")
         _text(row["gap"], f"{row_path}.gap", required=False)
         _enum(row["tab"], PLAN_TABS, f"{row_path}.tab")
+        if "instrument" in row:
+            try:
+                instruments.normalize_instrument(row["instrument"], row["symbol"])
+            except instruments.InstrumentContractError as exc:
+                raise DashboardRenderError(f"{row_path}.instrument is invalid") from exc
+        if "execution_context" in row:
+            try:
+                context = instruments.normalize_context(row["execution_context"], underlying=row["instrument"]["underlying"] if "instrument" in row else row["symbol"])
+            except (instruments.InstrumentContractError, KeyError) as exc:
+                raise DashboardRenderError(f"{row_path}.execution_context is invalid") from exc
+            if "instrument" in row and context["tool_kind"] != row["instrument"]["tool_kind"]:
+                raise DashboardRenderError(f"{row_path} plan and holding tool disagree")
+            if row.get("plan_detail") and row["plan_detail"].get("execution_context") != context:
+                raise DashboardRenderError(f"{row_path} execution context differs from its plan")
         if row.get("strategy_category") is not None:
             _text(row["strategy_category"], f"{row_path}.strategy_category")
             if row["strategy_category"] not in categories:
@@ -986,8 +1030,20 @@ def _validate_positions_plans(value: Any) -> Dict[str, Any]:
                 _text(value_text, f"{row_path}.{key}[{value_index}]")
         if row.get("plan_detail") is not None:
             _validate_plan_detail(row["plan_detail"], f"{row_path}.plan_detail")
+            if (
+                "instrument" in row
+                and row["plan_detail"].get("underlying") is not None
+                and row["instrument"]["underlying"] != row["plan_detail"]["underlying"]
+            ):
+                raise DashboardRenderError(f"{row_path} plan and holding underlying disagree")
             if row["tab"] == "plan" and row["plan_detail"]["plan_stage"] == "position_management":
                 raise DashboardRenderError("position management belongs to holdings, not unheld buy plans")
+        if row.get("valuation") is not None:
+            from trading_review_valuation import ValuationError, validate_valuation
+            try:
+                validate_valuation(row["valuation"], symbol=row["symbol"])
+            except ValuationError as exc:
+                raise DashboardRenderError(str(exc)) from exc
         if data_status == "empty":
             raise DashboardRenderError(
                 f"{row_path} empty position item cannot contain factual fields"
@@ -1210,6 +1266,23 @@ def project_weekly_display(packet: Any) -> Dict[str, Any]:
     return weekly
 
 
+def enrich_display_from_state(snapshot: Any, store: Any) -> Dict[str, Any]:
+    """Attach only latest allowlisted valuation rows; never infer tools/plans."""
+    from trading_review_portfolio import latest_valuations
+    view = validate_display_snapshot(snapshot)
+    rows = view["daily"]["positions_plans"]["items"]
+    values = latest_valuations(store, [row["symbol"] for row in rows])
+    changed = False
+    for row in rows:
+        valuation = values.get(row["symbol"])
+        if valuation is not None and row.get("valuation") != valuation:
+            row["valuation"] = valuation
+            changed = True
+    if changed:
+        view["daily"]["meta"]["generated_at"] = dt.datetime.now(ZoneInfo("Asia/Shanghai")).replace(microsecond=0).isoformat()
+    return validate_display_snapshot(view)
+
+
 def validate_display_snapshot(snapshot: Any) -> Dict[str, Any]:
     root = _object(snapshot, "$display")
     keys = {"schema_version", "daily", "weekly"}
@@ -1366,10 +1439,12 @@ def build_weekly_packet(review: Mapping[str, Any]) -> Dict[str, Any]:
         "coverage_status", "compliance_status", "outcome_status",
         "deviation_type", "reason", "next_rule", "data_status",
     }
+    instrument_episode_keys = {"trade_symbol", "tool_kind", "observation_timeframe", "trigger_timeframe", "trigger_basis"}
     for index, raw in enumerate(_array(review.get("episode_assessments", []), "$weekly_readback.episode_assessments")):
         row = _object(raw, f"$weekly_readback.episode_assessments[{index}]")
         if _episode_needs_review(row):
-            review_episodes.append({key: row.get(key) for key in episode_keys})
+            keys = episode_keys | (instrument_episode_keys if "trade_symbol" in row else set())
+            review_episodes.append({key: row.get(key) for key in keys})
 
     freshness = _object(review["freshness"], "$weekly_readback.freshness")
     overall_status = review["data_status"]
@@ -1480,13 +1555,17 @@ def validate_weekly_packet(packet: Any) -> Dict[str, Any]:
         "coverage_status", "compliance_status", "outcome_status",
         "deviation_type", "reason", "next_rule", "data_status",
     }
+    instrument_episode_fields = {"trade_symbol", "tool_kind", "observation_timeframe", "trigger_timeframe", "trigger_basis"}
     episodes = _array(source["review_episodes"], "$weekly.review_episodes")
     identities = set()
     for index, raw in enumerate(episodes):
         path = f"$weekly.review_episodes[{index}]"
         row = _object(raw, path)
-        _reject_unknown(row, episode_fields, path)
+        _reject_unknown(row, episode_fields | instrument_episode_fields, path)
         _required_keys(row, episode_fields, path)
+        contextual = "trade_symbol" in row
+        if contextual:
+            _required_keys(row, instrument_episode_fields, path)
         date = _date_text(row["market_date"], f"{path}.market_date")
         if not start <= date <= end:
             raise DashboardRenderError("weekly episode date is outside the review period")
@@ -1505,9 +1584,20 @@ def validate_weekly_packet(packet: Any) -> Dict[str, Any]:
         _enum(row["outcome_status"], {"success", "failure", "open", "flat", "unverifiable"}, f"{path}.outcome_status")
         _optional_text(row["deviation_type"], f"{path}.deviation_type")
         _enum(row["data_status"], MODULE_STATUSES - {"empty"}, f"{path}.data_status")
+        if contextual:
+            try:
+                state_fact = instruments.normalize_instrument(
+                    {"tool_kind": row["tool_kind"], "underlying": row["underlying"]}, row["trade_symbol"]
+                )
+            except instruments.InstrumentContractError as exc:
+                raise DashboardRenderError(f"{path} instrument identity is invalid") from exc
+            for key in ("observation_timeframe", "trigger_timeframe"):
+                if row[key] is not None and row[key] not in instruments.TIMEFRAMES:
+                    raise DashboardRenderError(f"{path}.{key} is unsupported")
+            _enum(row["trigger_basis"], {"bar_close", "intrabar_touch", "unconfirmed"}, f"{path}.trigger_basis")
         if not _episode_needs_review(row):
             raise DashboardRenderError("review_episodes must contain only episodes needing review")
-        identity = (date, row["underlying"], row["side"])
+        identity = (date, row.get("trade_symbol", row["underlying"]), row["side"])
         if identity in identities:
             raise DashboardRenderError("weekly review episodes contain a duplicate natural key")
         identities.add(identity)
@@ -1654,10 +1744,6 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
         )
         value = _format_number(row["value"])
         change = _format_pct(row["change_pct"])
-        dots = "".join(
-            f'<span class="v2-meter-dot{" is-on" if index < row["strength"] else ""}" aria-hidden="true"></span>'
-            for index in range(3)
-        )
         flow = ""
         if row.get("capital_flow"):
             capital = row["capital_flow"]
@@ -1680,16 +1766,10 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
                 <small>{_ui(row["symbol"])}{proxy_note} · {_ui(row["session"])}</small>
                 {flow}{unavailable}
               </div>
-              <div class="v2-market-direction {_direction_class(direction_tone)}">
-                <strong>{_escape(DIRECTION_LABELS[direction])}</strong>
-                <small>{_escape(change)}</small>
-              </div>
-              <div class="v2-market-strength" aria-label="强度 {row["strength"]}/3">
-                {dots}
-              </div>
+              <div class="v2-market-value"><strong>{_escape(value)}</strong></div>
+              <div class="v2-market-direction {_direction_class(direction_tone)}"><strong>{_escape(change)}</strong></div>
               <div class="v2-market-state">
                 <strong>{_ui(row["state"])}</strong>
-                <small>{_escape(value)}</small>
               </div>
             </div>
             """
@@ -1705,9 +1785,9 @@ def _render_market(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
           <h1 id="market-heading">市场风险雷达</h1>
           {_module_status(market["status"])}
         </div>
-        <p class="v2-side-note">相对昨日收盘；代理价格不等同于指数或收益率。</p>
+        <p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p>
         <div class="v2-market-head" role="row">
-          <span>资产/指数</span><span>方向</span><span>强度</span><span>状态</span>
+          <span>资产/指数</span><span>最新值</span><span>涨跌幅</span><span>状态</span>
         </div>
         <div class="v2-market-list" role="table">
           {body}
@@ -1902,12 +1982,16 @@ def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
     detail_label = "查看持仓计划" if row["tab"] == "holdings" else "查看买入计划"
     if not row.get("plan_detail"):
         detail_label = "查看观察条件与下一步"
+    context = row.get("execution_context")
+    context_html = f'<div class="v2-execution-context"><small>{_escape(instruments.context_text(context))}</small></div>' if context else '<div class="v2-execution-context"><small>交易工具与观察周期：待确认</small></div>'
     return f"""
       <div class="{classes}" data-tab="{_escape(row["tab"])}">
         <div class="v2-plan-symbol"><strong>{display_name}</strong>{symbol_note}</div>
         <div class="v2-plan-role"><strong>{_ui(row["role"], "持仓" if row["tab"] == "holdings" else "买入候选")}</strong><small>{_ui(row["holding_state"], "本次读取时持仓" if row["tab"] == "holdings" else "尚未持有")}</small></div>
         <div class="v2-plan-coverage">{_ui(row["plan_coverage"], "计划待确认")}</div>
         <div class="v2-trigger v2-tone-{_escape(trigger_tone)}"><small>{_ui(trigger["label"], "触发条件")}</small><strong>{_ui(trigger["value"], "待确认")}</strong></div>
+        {_render_valuation(row)}
+        {context_html}
         <details class="v2-plan-checks">
           <summary>{detail_label}</summary>
           <div class="v2-plan-check-grid">
@@ -1920,6 +2004,18 @@ def _render_plan_row(row: Mapping[str, Any], allow_verified_tone: bool) -> str:
         </details>
       </div>
     """
+
+
+def _render_valuation(row: Mapping[str, Any]) -> str:
+    v = row.get("valuation")
+    if not v:
+        return ""
+    label = {"available": _format_number(float(v["pr"])) if v["pr"] is not None else "待补充", "unavailable": "待补充", "not_applicable": "不适用", "stale": "数据较旧"}[v["status"]]
+    pe = f'<span>PE(TTM) <b>{_format_number(float(v["pe_ttm"]))}</b></span>' if v["pe_ttm"] is not None else ""
+    roe = f'<span>ROE <b>{_format_number(float(v["roe_pct"]))}%</b> · {_escape(v["roe_period_label"])}</span>' if v["roe_pct"] is not None else ""
+    end = f'年度截至 {_escape(v["roe_period_end"])} · ' if v["roe_period_end"] else ""
+    gap = f'<span class="v2-valuation-gap">{_ui(v["gap"], "估值证据待补充")}</span>' if v["gap"] else ""
+    return f'<div class="v2-valuation" data-valuation-status="{v["status"]}"><strong>市赚率 <b>{_escape(label)}</b></strong>{pe}{roe}{gap}<small>{end}读取 {_escape(_time_label(v["as_of"]))}</small></div>'
 
 
 def _render_positions(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = None) -> str:
@@ -2251,10 +2347,15 @@ def _render_weekly_plan_review(packet: Optional[Dict[str, Any]]) -> str:
         if not _is_us(row["underlying"]):
             continue
         plan_ref = "无事前已确认计划" if row["plan_id"] is None else "依据事前已确认计划复核"
+        tool = {"stock": "正股", "single_stock_leveraged_etf": "单股杠杆 ETF", "leap_call": "LEAP Call", "unknown": "工具待确认"}.get(row.get("tool_kind"), "历史记录：工具未区分")
+        timeframe = instruments.PERIOD_LABELS.get(row.get("observation_timeframe"), "周期待确认")
+        actual = ""
+        if row.get("trade_symbol") and row.get("tool_kind"):
+            actual = f"实际交易对象：{instruments.display_trade_symbol(row['trade_symbol'], row['tool_kind'])} · "
         episodes.append(
             f'<article class="v2-episode-review"><div><strong>{_escape(row["market_date"])} · {_ui(row["underlying"])} · {_escape({"buy": "买入", "sell": "卖出"}.get(row["side"], "交易"))}</strong>'
             f'{_status_badge(row["data_status"])}</div>'
-            f'<p>{_escape(compliance_labels[row["compliance_status"]])} · {_escape(outcome_labels[row["outcome_status"]])}</p>'
+            f'<p>{_escape(actual)}{_escape(tool)} · {_escape(timeframe)} · {_escape(compliance_labels[row["compliance_status"]])} · {_escape(outcome_labels[row["outcome_status"]])}</p>'
             f'<small>{_escape(plan_ref)}</small>'
             f'<p><strong>原因：</strong>{_ui(row["reason"], "原因待复核")}</p>'
             f'<p><strong>下一条规则：</strong>{_ui(row["next_rule"], "先核对事前计划")}</p></article>'

@@ -24,6 +24,8 @@ Skill 本身不产生权限。当前默认可例行同步的最小事实是 posi
 
 能力可发现或连接检查通过，不等于账户完整、历史完整、字段有权限或已经对账。
 
+已批准的估值扩展：只对当前美股持仓 underlying 与明确计划买入的未持有标的读取 Longbridge PE(TTM) 和可核对的年度 ROE/报告期。`compare` 必须显式指定范围内标的，单标的不使用自动补同业模式，而使用 `calc-index SYMBOL --fields pe`；[Longbridge 官方 CLI 文档](https://open.longbridge.com/docs/cli/market-data/calc-index)将 `pe` 定义为 PE (TTM)，并要求显式 symbol。ETF 不用企业 PR。`financial-report --report af` 获取年度报告，不能带会覆盖为最新季度/半年度摘要的 `--latest`。响应 root/nested 标的身份、年度利润/权益回报和期间都能核对才计算；不回退到未知期间 ROE。固定标量可入 v4 状态表，不扩展账户读取、其他来源或自动化范围。
+
 本地已确认扩展：Longbridge `kline history` 仅用于当前持仓 underlying 与已确认候选池的计划构造，单次最多 20 个标的、每标的最近最多 550 个自然日、明确复权的已完成 1D 日线。必须先实机核验能力；不可运行时 blocked，不安装、不回退 yfinance。周度执行规则可在私有机械评估中使用已授权执行事实，但不持久化原始成交价格或券商 ID。新周度不为复盘额外读取 profit-analysis、归因或现金流。
 
 ## 每日窗口
@@ -44,7 +46,7 @@ Skill 本身不产生权限。当前默认可例行同步的最小事实是 posi
 
 V2 HTML 和 JSON 输出必须在该私有根目录下且位于 Git 工作树之外。输出文件权限为 0600，父目录权限为 0700，写入使用临时文件和原子改名。
 
-2026-08-31 用户明确批准的限定例外：通过正式发布命令，将严格删去账户模块/标签/时间、后台说明、委托计数及无成交行的固定展示快照与 HTML 保存到 `~/Library/Application Support/MarsTradingCenter/web-ui/`。仍为 0700/0600，不能复制完整输入包或原始响应。只读 LaunchAgent 提供 `127.0.0.1:8765`，不新增采集/调度/券商/数据库写入或 Obsidian 权限。详见 [本地展示服务](local-web-service.md) 及 `docs/architecture/ts-web-and-obsidian-bridge.md`。TS 负责渲染/发布/HTTP，Python 保留证据校验；Bridge 范围另经批准但准确 Schema/模板仍待确认。其他运行保持原默认边界。
+2026-08-31 用户明确批准的限定例外：通过正式发布命令，将严格删去账户模块/标签/时间、后台说明、委托计数及无成交行的固定展示快照与 HTML 保存到 `~/Library/Application Support/MarsTradingCenter/web-ui/`。仍为 0700/0600，不能复制完整输入包或原始响应。只读 LaunchAgent 提供 `127.0.0.1:8765`，不新增采集/调度/券商/数据库写入或 Obsidian 权限。详见 [本地展示服务](local-web-service.md) 及 `docs/architecture/ts-web-and-obsidian-bridge.md`。TS 负责渲染/发布/HTTP，Python 保留证据校验；Bridge 准确 Schema/模板和保护边界已另获批准，经独立 receiver 执行，仍需每份复盘确认。其他运行保持原默认边界。
 
 项目内允许保留：
 
@@ -95,7 +97,7 @@ Codex 只读取本地确定性脚本生成的脱敏固定字段包。它可以�
 
 ## Wiki 和 Obsidian
 
-本项目不负责 Obsidian Vault 写入。知识中心任务是 Vault 唯一写入者；交易中心只在当前 run 用户明确确认“复盘完成”后提供脱敏交接候选。`confirmed-investment-review.v1` 最终字段未获准确文本确认前，不宣称正式 ingest 包完成。
+知识中心 receiver 是 Vault 唯一的 Bridge 写入者；交易中心只负责脱敏草稿、当前版本确认和只读入队。`confirmed-investment-review.v1` 准确文本、模板和保护边界已获批；实施授权与实际复盘确认是独立门。没有严格 DB 绑定不能入队，管理原则确认或服务长期授权不等于整份复盘完成。见 [知识中心交接边界](knowledge-handoff-contract.md)。
 
 飞书 Wiki 写入是独立确认门。必须先展示本轮脱敏增量、目标节点和字段范围，确认后写入并回读；没有确认、写入失败或回读失败时，不显示写入完成，也不生成依赖写入完成的后续关注点。
 

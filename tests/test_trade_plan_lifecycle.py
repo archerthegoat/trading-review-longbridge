@@ -66,6 +66,71 @@ class TradePlanLifecycleTests(unittest.TestCase):
         self.assertNotIn('data-zone-kind="add"', html)
         self.assertEqual(self.store.table_count("weekly_reviews"), 0)
 
+    def test_tool_and_timeframe_are_hash_bound_and_stock_does_not_match_leap_row(self):
+        payload = request()
+        for row in payload["bars"]:
+            row["timestamp"] = (dt.datetime.fromisoformat(row["timestamp"]) + dt.timedelta(days=140)).isoformat()
+        payload["source"]["requested_start"] = payload["bars"][0]["timestamp"][:10]
+        payload["source"]["requested_end"] = payload["source"]["as_of"] = payload["bars"][-1]["timestamp"][:10]
+        payload["generated_at"] = (dt.datetime.fromisoformat(payload["generated_at"]) + dt.timedelta(days=140)).isoformat()
+        payload["expires_at"] = (dt.datetime.fromisoformat(payload["expires_at"]) + dt.timedelta(days=140)).isoformat()
+        payload["schema_version"] = "trading-plan-request.v2"
+        payload["source"]["symbol"] = payload["symbol"]
+        payload["execution_context"] = {
+            "tool_kind": "stock", "trade_symbol": payload["symbol"],
+            "observation_symbol": payload["symbol"], "observation_timeframe": "1D",
+            "trigger_timeframe": "1D", "trigger_basis": "bar_close", "exception_note": None,
+        }
+        draft = LIFE.constructor.construct_plan(payload)
+        self.assertEqual(draft["schema_version"], "trading-plan-draft.v2")
+        projection = LIFE.project_draft(draft)
+        self.store.put_plan_version(projection)
+        stored = self.store.get_plan_version(draft["plan_id"], 1)
+        self.assertEqual(stored["execution_context"], payload["execution_context"])
+        daily = fixture("complete")
+        daily["positions_plans"]["items"][0].update(
+            symbol=payload["symbol"] + ":OPTION", instrument={"tool_kind": "leap_call", "underlying": payload["symbol"]}, valuation=None
+        )
+        with self.assertRaises(LIFE.state.StateContractError):
+            LIFE.enrich_daily(daily, stored)
+        mismatched = copy.deepcopy(payload)
+        mismatched["execution_context"]["observation_timeframe"] = "4H"
+        mismatched["execution_context"]["trigger_timeframe"] = "4H"
+        self.assertEqual(LIFE.constructor.construct_plan(mismatched)["data_status"], "blocked")
+
+    def test_leveraged_etf_observation_symbol_and_underlying_both_match(self):
+        payload = request()
+        for row in payload["bars"]:
+            row["timestamp"] = (dt.datetime.fromisoformat(row["timestamp"]) + dt.timedelta(days=140)).isoformat()
+        payload["source"]["requested_start"] = payload["bars"][0]["timestamp"][:10]
+        payload["source"]["requested_end"] = payload["source"]["as_of"] = payload["bars"][-1]["timestamp"][:10]
+        payload["generated_at"] = (dt.datetime.fromisoformat(payload["generated_at"]) + dt.timedelta(days=140)).isoformat()
+        payload["expires_at"] = (dt.datetime.fromisoformat(payload["expires_at"]) + dt.timedelta(days=140)).isoformat()
+        payload.update(schema_version="trading-plan-request.v2", symbol="NVDA.US", display_name="NVDA")
+        payload["source"]["symbol"] = "NVDL.US"
+        payload["execution_context"] = {
+            "tool_kind": "single_stock_leveraged_etf", "trade_symbol": "NVDL.US",
+            "observation_symbol": "NVDL.US", "observation_timeframe": "1D",
+            "trigger_timeframe": "1D", "trigger_basis": "bar_close", "exception_note": None,
+        }
+        draft = LIFE.constructor.construct_plan(payload)
+        self.assertEqual(draft["source"]["symbol"], "NVDL.US")
+        projection = LIFE.project_draft(draft)
+        self.store.put_plan_version(projection)
+        daily = fixture("complete")
+        daily["positions_plans"]["items"][0].update(
+            symbol="NVDL.US",
+            instrument={"tool_kind": "single_stock_leveraged_etf", "underlying": "NVDA.US"},
+            valuation=None,
+        )
+        enriched = LIFE.enrich_daily(daily, self.store.get_plan_version(draft["plan_id"], 1))
+        self.assertEqual(enriched["positions_plans"]["items"][0]["execution_context"]["trade_symbol"], "NVDL.US")
+
+        wrong_company = copy.deepcopy(daily)
+        wrong_company["positions_plans"]["items"][0]["instrument"]["underlying"] = "TSLA.US"
+        with self.assertRaises(LIFE.state.StateContractError):
+            LIFE.enrich_daily(wrong_company, self.store.get_plan_version(draft["plan_id"], 1))
+
     def test_forged_hash_and_confirmation_without_specific_approval_fail_closed(self):
         forged = copy.deepcopy(self.draft)
         forged["zones"][0]["high"] = "999"

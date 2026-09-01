@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,8 @@ if RUNNER_SPEC is None or RUNNER_SPEC.loader is None:
     raise RuntimeError("could not load runner")
 RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(RUNNER)
+
+from review_journal_contract import JournalError
 
 
 GENERATED_AT = "2026-08-29T08:00:00+08:00"
@@ -149,6 +152,16 @@ def daily_facts_bundle(run_id: str = "run-facts") -> dict[str, object]:
     bundle.pop("analysis")
     bundle["schema_version"] = RUNNER.FACTS_INPUT_SCHEMA
     return bundle
+
+
+def retime_daily_bundle(bundle: dict[str, object], value: str) -> None:
+    bundle["generated_at"] = value
+    bundle["analysis"]["generated_at"] = value
+    for module in bundle["modules"].values():
+        module["collected_at"] = value
+    bundle["modules"]["account_snapshot"]["payload"]["snapshot_at"] = value
+    bundle["modules"]["positions_snapshot"]["payload"][0]["snapshot_at"] = value
+    bundle["modules"]["market_snapshots"]["payload"][0]["as_of"] = value
 
 
 def weekly_state_bundle(dependency: dict[str, object]) -> dict[str, object]:
@@ -410,14 +423,53 @@ class IncrementalRunnerTests(unittest.TestCase):
         success_empty = daily_bundle("run-success-empty")
         success_empty["modules"]["trades"] = {
             "status": "empty",
-            "collected_at": GENERATED_AT,
+            "collected_at": "2026-08-29T09:00:00+08:00",
             "payload": [],
         }
+        retime_daily_bundle(success_empty, "2026-08-29T09:00:00+08:00")
         blocked_result = RUNNER.process_daily_bundle(self.store, blocked)
         empty_result = RUNNER.process_daily_bundle(self.store, success_empty)
         self.assertNotEqual(blocked_result["facts_hash"], empty_result["facts_hash"])
         self.assertEqual(blocked_result["analysis_cache"], "written")
         self.assertEqual(empty_result["analysis_cache"], "written")
+
+    def test_daily_source_binding_failure_is_recoverable_by_exact_rerun(self) -> None:
+        bundle = daily_bundle("run-source-recovery")
+        with mock.patch(
+            "review_journal_state.record_daily_source",
+            side_effect=RuntimeError("synthetic binding failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic binding failure"):
+                RUNNER.process_daily_bundle(self.store, bundle)
+        run = self.store.get_run(bundle["run_id"])
+        self.assertIsNotNone(run["finished_at"])
+        self.assertEqual(self.store.table_count("daily_review_sources"), 0)
+
+        manifest = RUNNER.process_daily_bundle(self.store, bundle)
+        self.assertEqual(manifest["run_id"], bundle["run_id"])
+        self.assertEqual(self.store.table_count("daily_review_sources"), 1)
+
+    def test_older_orphan_run_cannot_supersede_a_newer_source(self) -> None:
+        older = daily_bundle("run-source-older")
+        with mock.patch(
+            "review_journal_state.record_daily_source",
+            side_effect=RuntimeError("synthetic binding failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic binding failure"):
+                RUNNER.process_daily_bundle(self.store, older)
+        newer = daily_bundle("run-source-newer")
+        newer_at = "2026-08-29T09:00:00+08:00"
+        retime_daily_bundle(newer, newer_at)
+        newer["plan_hash"] = "b" * 64
+        RUNNER.process_daily_bundle(self.store, newer)
+
+        with self.assertRaisesRegex(JournalError, "superseded"):
+            RUNNER.process_daily_bundle(self.store, older)
+        row = self.store.connection.execute(
+            "SELECT * FROM daily_review_sources ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row["run_id"], "run-source-newer")
+        self.assertEqual(self.store.table_count("daily_review_sources"), 1)
 
     def test_weekly_plan_uses_expected_dates_and_requires_explicit_weekly_source_reads(self) -> None:
         self.store.ingest_partition(

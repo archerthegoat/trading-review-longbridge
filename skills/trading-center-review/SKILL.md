@@ -22,8 +22,10 @@ description: 基于 Longbridge 授权只读事实、已确认周计划和 owner-
 - 周度复盘：读取 [周度复盘工作流](references/weekly-review-workflow.md)、[Longbridge 导入契约](references/longbridge-import-contract.md) 与 [V2 看板契约](references/dashboard-visualization-contract.md)。
 - 市场、计划或交易解释：读取 [Codex 分析边界](references/analysis-skill-routing.md)。
 - 构造或确认价格区间计划：读取 [EMA 计划与生命周期](references/trade-plan-workflow.md)。
+- 每笔新计划明确区分正股、单股杠杆 ETF、LEAP Call 与其实际交易/观察标的；观察周期是 K 线判断周期，不是持有或兑现周期。未确认工具/周期不回填，其他周期数据不冒充当前仅支持的已完成日线区间。
+- 持仓/买入候选市赚率：使用 `collect_scoped_valuations.py` 与 `trading_review_valuation.py` 固定投影；PR = PE(TTM) / 年度 ROE 百分点，展示财年/期末/读取时间，不自动贴低估标签、不扩展同业、不用于 ETF。估值附着标的，不另建页面；读取授权边界的年度报告注意事项。
 - 用户已批准本地常驻展示、发布或维护：读取 [本地展示服务](references/local-web-service.md)；只操作固定目录和该服务的 LaunchAgent。
-- 用户确认后准备知识交接：读取 [知识中心交接边界](references/knowledge-handoff-contract.md)。
+- 准备脱敏日记草稿、确认后入队或运行知识中心 receiver：读取 [知识中心交接边界](references/knowledge-handoff-contract.md)；实施授权不能替代每份复盘的最终确认。
 - 仅当用户显式要求过渡期 Feishu Wiki 写入时，才读取 [Wiki 记录结构](references/feishu-wiki-record-structure.md)。
 
 调度语义为 Asia/Shanghai 周二至周五每日、周六周度、周一和周日不运行。手动运行必须明确选择 daily 或 weekly。
@@ -96,7 +98,7 @@ Codex 分析缓存键固定为：
 
 运行草稿校验和 V2 renderer。每日对话只交付通过 Schema、隐私和离线检查的 HTML 链接及简短状态；Markdown、完整事件工件和账户事实留在私有目录。
 
-本机已明确启用常驻展示时，通过 `node skills/trading-center-review/web/cli.ts publish` 发布同一校验结果，交付 `http://127.0.0.1:8765/`；日度未指定周度输入则复用持久周度内容。不能回到手写临时服务器交付，不能把服务常驻当成自动生成新数据。未安装时仍使用私有 HTML 工件，不自行安装。
+本机已明确启用常驻展示时，通过 `node skills/trading-center-review/web/cli.ts publish` 发布同一校验结果，交付 `http://127.0.0.1:8765/`；日度未指定周度输入则复用持久周度内容。已持久化估值需要重建展示时显式加 `--enrich-db`，只读取限定标的白名单，不依赖临时页面，也不刷新行情时间。不能把服务常驻当成自动生成新数据。未安装时仍使用私有 HTML 工件，不自行安装。
 
 V2 页面固定为市场风险雷达约 42% / Codex 判断约 58%，随后是上一交易日成交、持仓 × 计划、全宽事件和折叠数据说明。成交区只展示有明确成交证据的美股记录，不显示未成交委托、订单计数或周度操作摘要。账户字段继续进入私有 Schema 校验和 Codex 输入，但不渲染账户概览、金额、基础币种、快照时间或金额显隐控件。
 
@@ -106,7 +108,7 @@ V2 页面固定为市场风险雷达约 42% / Codex 判断约 58%，随后是上
 
 周度正文覆盖完整 America/New_York 交易周、订单/成交、事前已确认计划与全部确认增量、是否按计划执行、下周保留/删除/重写/新增草案、相关事件和风险。复盘重点是执行纪律，不再重复券商具体盈亏。
 
-SQLite v3 追加计划版本、区间、trade episode 分类和执行指标。新运行只接受 `trading-review-weekly-state.v2`，不写收益、归因或现金流历史表。覆盖率、执行率、计划胜率和需复盘数由已验证分类计算；无事前计划权威或成交证据时明确 blocked，不能从历史盈亏推算。
+SQLite v3 追加计划版本、区间、trade episode 分类和执行指标；v5 追加工具/周期上下文及工具级 episode。旧 underlying 级运行保留 `trading-review-weekly-state.v2`，新工具级运行使用 v3；不写收益、归因或现金流历史表。覆盖率、执行率、计划胜率和需复盘数由已验证分类计算；无事前计划权威、实际工具或成交证据时保持不可评估/blocked，不能从历史盈亏推算。
 
 周度生成 `trading-review-weekly-dashboard.v2`，与每日包交给同一个 V2 renderer/template，保留每日骨架和一个 `<main>`，没有日/周模式切换或独立周度 panel。周度附加内容只由周度或手动周度运行更新；每日只读最近周度 revision，对周度表零写入。无每日包时不生成周度专用页面。周度正文仍是私有审计工件。
 
