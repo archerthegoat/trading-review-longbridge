@@ -436,3 +436,60 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 新鲜非作者 LunaMax 对精确 diff `b9726734c53c711c808ea2eb57acf67e6b034cb9e82eebc61b7dc4adec38572e` 的窄范围只读复核为 **ARCHITECTURE REVIEW PASS**；该结论只覆盖本节合同，不代表实现、部署、Browser 或人工验收通过。
 
 实现仅修改两个 Python 展示文件、一个 TS renderer 和各一个定向测试：无计划 context 现在显示“观察口径（非交易计划）”并压制计划派生内容；plan 内 context 优先；触发周期始终显示；脱敏 `.US:OPTION` 不再被 Python 投影删除。全量 212 项 Python、24 项 TS、`tsc --noEmit`、Skill 校验与 diff whitespace 检查均 **PASS**。这些是自动证据；本轮部署 **NOT RUN**，Browser 与人工验收继续 **PENDING**。
+
+## 12. 收盘口径市场环境判断（2026-09-01 用户已确认）
+
+### 12.1 目标、决定与替代方案
+
+目标是在不恢复原“盘前判断”冗余内容的前提下，为市场风险雷达补一个稳定、可复盘的整体市场判断。用户明确选择上一美股交易日收盘口径，并批准本次及后续日度复盘只读六个既有代理的完成日线。
+
+决定：顶部恢复双栏，左侧保留客观收盘雷达，右侧仅显示“环境结论、主要定价信号、跨资产确认、下一交易日观察”。它是市场价格隐含的收盘环境判断，不是实时宏观模型、不证明价格变化的因果，也不包含持仓、计划、周度纪律或具体买卖动作。
+
+已拒绝：固定盘前时点会迅速过期；持续刷新会引入调度、来源时间和页面身份歧义；把现有夜盘 quote 改标签会伪造收盘口径；本阶段引入 CPI、就业、政策利率和新闻数据会扩大来源、证据与维护边界。以上方案如未来重启，必须重新讨论数据新鲜度、权限、失败和回滚。
+
+### 12.2 数据、展示与责任边界
+
+- 数据只来自 `SPY.US`、`QQQ.US`、`IEF.US`、`GLD.US`、`USO.US`、`IBIT.US` 最近两根已完成 1D bar，固定 `adjust=none`、`session=intraday`；查询最多回看 14 个自然日，每次日度复盘最多一次。不新增标的、数据源、盘前/夜盘 quote、持续调度或账户读取。
+- `market.basis=completed_close`、`market.market_date=meta.review_date`，六项 complete 行必须标记“收盘 / 已完成收盘”，bar 时间换算到 America/New_York 后等于 review_date。SPY/QQQ 同日收盘不齐时不形成结论；其他代理缺失时只降低跨资产确认。
+- 判断由固定、可复算的收盘投影生成：权益方向以 SPY/QQQ 为核心，IBIT 只作高波动风险偏好确认，IEF 只作国债价格/利率压力代理，GLD 与 USO 保留多义性。所有表述使用“定价、可能、观察”，不写成已证明的宏观驱动。
+- Python 是 Schema、日期、字段和失败门；TS/Python renderer 生成同一静态 DOM；HTTP 和浏览器刷新只读取内容寻址 publication，不读取行情。后台 status 继续私有校验，前台不显示状态列或徽标。
+- `trading-review-display.v1` 只增加 market 内可选字段，不增加 SQLite 表或迁移。旧 publication 不回填；旧输入无 environment 时继续全宽显示雷达。
+
+来源边界见 [授权与数据边界](../../skills/trading-center-review/references/authorization-and-data-boundary.md)、[Longbridge 看板数据契约](../../skills/trading-center-review/references/longbridge-dashboard-data-contract.md)、[V2 看板契约](../../skills/trading-center-review/references/dashboard-visualization-contract.md) 和 [本地发布边界](../../skills/trading-center-review/references/local-web-service.md)。
+
+### 12.3 状态、边缘情况与失败矩阵
+
+| 情况 | 结果 | 发布行为 |
+| --- | --- | --- |
+| 六项均有 review_date 与前一完成收盘 | 雷达和环境判断 complete | 可生成新静态页 |
+| SPY 或 QQQ 缺失/日期不一致 | 显示“本次不形成市场环境判断” | 可保留 partial 事实，不生成方向性结论 |
+| IEF/GLD/USO/IBIT 任一缺失 | 核心权益结论可保留，明确跨资产确认不足 | 整体 market/environment 保持 partial |
+| Longbridge 命令失败、超时或非 JSON | 不产生新展示快照 | 当前成功 publication 不变 |
+| 缺少前一完成 bar、重复交易日或非正数 close | 对应事实拒绝 | 不用旧 quote、计划或测试数据补齐 |
+| 周末、假日或半日市 | 只相信上游 review_date 与 bar 的纽约日期 | 不假定固定 16:00 时间，不用工作日猜交易日 |
+| 浏览器刷新、服务重启 | 重新读取同一 publication | 不改变 market_date、行情或周度时间 |
+
+原始响应只在进程内解析或位于 owner-only 私有运行区；Git、HTML 和发布快照只含固定公开代理投影。脚本无账户、交易或写券商能力。维护所有权仍由交易中心任务负责采集/投影/发布，用户负责判断是否有用及人工验收。
+
+### 12.4 实施、迁移、回滚与未决风险
+
+实施为一个独立功能分支检查点：先扩展 optional display contract 和双 renderer，再增加固定六标的刷新器，运行最小定向验证后生成新的私有展示快照与不可变历史路由。无数据库迁移、自动化修改、服务安装、重启、Bridge 或 Vault 变更。
+
+回滚优先把 `/` 切回上一成功 publication；源码回滚使用 revert，不重写历史。旧快照因 optional 字段仍可由新 renderer 读取；若新收盘字段校验失败，发布原子门保持现有页面。私有运行工件不自动删除。
+
+已知限制：单日 ETF 收盘只能表达市场定价，不能覆盖完整宏观 regime；ETF tracking、分红/拆分、黄金/原油/比特币的多义性和盘后新事件都可能使次日环境改变。本组件通过明确日期和条件式观察暴露这一限制，不做实时修正。需求和读取范围 **APPROVED**；4 项定向 Python、1 项 TS/Python DOM 对齐、TypeScript typecheck 与 diff whitespace **PASS**；真实六标的收盘读取、发布和 HTTP hash readback **PASS**；独立架构复核在合并前 **PENDING**；浏览器与人工验收 **PENDING**。
+
+### 12.5 单标签桌面人工验收清单
+
+目标构建：分支 `codex/dashboard-frontend-cleanup`；历史路由 `/market-close-environment-20260901/`；publication_id=`2553ac19ff698c3d7eedec4b3004a4f7a179a61390ab484c758f8446b5c7beeb`。起始状态：只保留一个内置 Browser 标签，打开该路由，正常桌面宽度不小于 775px、100% 缩放，页面顶部，无筛选、无展开项。测试数据为 2026-08-31 ET 六个公开代理收盘；不为验收修改账户、持仓或计划。
+
+1. 顶部日期仍为 2026-08-31 ET，边界条显示“收盘口径 2026-08-31（ET）”，不得显示盘前或夜盘口径。
+2. 第一屏左侧有六行市场雷达，列仅为资产/指数、最新值、涨跌幅；右侧有“市场环境判断”，顺序为结论、三组定价信号、跨资产确认、下一交易日观察。不得出现状态列、完成徽标、待确认事项、周度判断或后台字段。
+3. 在该桌面宽度双栏应同时可读，不横向溢出、不截字、不出现过密空白；滚动到成交、持仓计划和事件区，确认原有层级与内容未被顶部改动破坏。
+4. 用鼠标和键盘分别切换持仓/买入计划、勾选“只看接近触发”“只看待确认”、展开一项计划和一个事件日期；焦点环清楚，页面不跳到错误位置，取消筛选可恢复全部。
+5. 刷新同一标签：日期、六项收盘、判断文字和滚动默认状态保持静态；刷新不出现新行情、不改变周度生成时间。返回历史路由后内容仍一致。
+6. Loading 不适用（静态本地 HTML）。如果真实输入碰到部分缺失，应按第 12.3 节显示 partial 文案；本次数据没有对应状态则记录 **NOT RUN**，不伪造缺失。命令失败/错误状态应保持上一成功页；stale 仅保留原日期，不升级为新收盘。
+7. 只检查桌面场景，不做手机/窄屏验收。Console 不应有异常；Network 在初始本地 HTML 后不应出现外部请求，页面无脚本、iframe、外部字体或图片。
+8. 重置：取消两个筛选，切回“当前持仓及计划”，关闭所有 details，滚回顶部；不要删除 publication、私有运行工件或历史路由。
+
+记录：双栏与文案 PASS/FAIL ______；鼠标/键盘/焦点/滚动 PASS/FAIL ______；刷新与历史路由 PASS/FAIL ______；Console/Network PASS/FAIL/NOT RUN ______；partial/error/stale PASS/FAIL/NOT RUN ______；总体验收 PASS/FAIL ______；备注 ______。

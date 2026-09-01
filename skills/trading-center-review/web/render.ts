@@ -60,8 +60,11 @@ function weeklyInline(w: Weekly | null, section: WeeklySection, heading: string)
 }
 function header(d: Daily, w: Weekly | null): string {
   const m = d.meta;
+  const cutoff = d.market.basis === 'completed_close'
+    ? `收盘口径 ${escape(d.market.market_date)}（ET）`
+    : `行情截至 ${escape(timeLabel(m.market_as_of))}`;
   return `<header class="v2-header"><div class="v2-brand"><strong>美股复盘</strong></div><div class="v2-header-meta"><span>日度回看</span><strong>${escape(m.review_date)}</strong><span>（ET）</span></div><div class="v2-header-meta v2-header-cutoff"><span>内容更新</span><strong>${escape(timeLabel(m.generated_at))}</strong></div></header>
-  <div class="v2-boundary-strip"><span>${ui(m.review_label, '盘前观察与交易纪律')}</span><span>行情截至 ${escape(timeLabel(m.market_as_of))}</span></div>${weeklyContext(w)}`;
+  <div class="v2-boundary-strip"><span>${ui(m.review_label, '每日复盘')}</span><span>${cutoff}</span></div>${weeklyContext(w)}`;
 }
 function market(d: Daily): string {
   const m = d.market;
@@ -72,7 +75,14 @@ function market(d: Daily): string {
     return `<div class="v2-market-row"><div class="v2-market-name"><strong>${ui(r.name)}</strong><small>${ui(r.symbol)}${r.is_proxy ? ` · 代理：${ui(r.proxy_for)}` : ''} · ${ui(r.session)}</small>${flow}${unavailable}</div>
       <div class="v2-market-value"><strong>${escape(number(r.value))}</strong></div><div class="v2-market-direction v2-direction-${direction}"><strong>${escape(pct(r.change_pct))}</strong></div></div>`;
   }).join('') || '<div class="v2-empty">暂无已确认市场数据</div>';
-  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1></div><p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>最新值</span><span>涨跌幅</span></div><div class="v2-market-list" role="table">${rows}</div></section>`;
+  const basisNote = m.basis === 'completed_close' ? '涨跌幅相对前一已完成交易日收盘；代理价格不等同于指数或收益率。' : '涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。';
+  return `<section class="v2-market" aria-labelledby="market-heading"><div class="v2-section-title"><h1 id="market-heading">市场风险雷达</h1></div><p class="v2-side-note">${basisNote}</p><div class="v2-market-head" role="row"><span>资产/指数</span><span>最新值</span><span>涨跌幅</span></div><div class="v2-market-list" role="table">${rows}</div></section>`;
+}
+function marketEnvironment(d: Daily): string {
+  const m = d.market, environment = m.environment;
+  if (!environment) return '';
+  const signals = environment.pricing_signals.map(row => `<article class="v2-environment-signal"><strong>${ui(row.label)}</strong><p>${ui(row.text)}</p></article>`).join('');
+  return `<section class="v2-judgement" aria-labelledby="environment-heading"><div class="v2-section-title"><h1 id="environment-heading">市场环境判断 <span>基于 ${escape(m.market_date)} 收盘</span></h1></div><p class="v2-headline">${ui(environment.headline)}</p><div class="v2-environment-signals">${signals}</div><div class="v2-environment-summary"><strong>跨资产确认</strong><p>${ui(environment.cross_asset_confirmation)}</p></div><div class="v2-environment-summary v2-environment-watch"><strong>下一交易日观察</strong><p>${ui(environment.next_session_watch)}</p></div><p class="v2-environment-boundary">只记录上一交易日收盘定价，不随盘前或盘中行情刷新。</p></section>`;
 }
 function operations(d: Daily): string {
   const o = d.operations, e = o.executions;
@@ -234,7 +244,8 @@ function events(d: Daily, w: Weekly | null): string {
   return `<section class="v2-events" aria-labelledby="events-heading"><div class="v2-section-title"><h1 id="events-heading">重要事件与时间轴</h1><span class="v2-section-note">按纽约日期分桶 · 同时显示北京时间</span></div><p class="v2-calendar-asof">日历核对：${escape(timeLabel(e.reference_at ?? d.meta.generated_at))} · 以下为情景分析，不是已公布结果或确定涨跌。</p>${e.status === 'stale' ? '<p class="v2-calendar-asof">日历较旧，使用前请重新核对排期。</p>' : ''}<div class="v2-calendar-weeks">${weeks}</div></section>`;
 }
 function dataNote(d: Daily, w: Weekly | null): string {
-  return `<details class="v2-data-note"><summary><strong>更新与使用说明</strong><span>点击展开</span></summary><div class="v2-data-content"><p>行情截至：${escape(timeLabel(d.meta.market_as_of))}</p><p>周度更新：${w ? escape(timeLabel(w.meta.generated_at)) : '尚未生成'}。周度内容不随每日页面刷新而重新计算。</p><p>刷新仅重载这份记录，不代表新行情；未确认的计划不能直接执行。</p></div></details>`;
+  const marketTime = d.market.basis === 'completed_close' ? `市场环境口径：${escape(d.market.market_date)} 已完成收盘（ET）` : `行情截至：${escape(timeLabel(d.meta.market_as_of))}`;
+  return `<details class="v2-data-note"><summary><strong>更新与使用说明</strong><span>点击展开</span></summary><div class="v2-data-content"><p>${marketTime}</p><p>周度更新：${w ? escape(timeLabel(w.meta.generated_at)) : '尚未生成'}。周度内容不随每日页面刷新而重新计算。</p><p>刷新仅重载这份记录，不代表新行情；未确认的计划不能直接执行。</p></div></details>`;
 }
 
 /** Only call with a snapshot admitted by the data boundary. No user template overrides. */
@@ -242,6 +253,8 @@ export function render(snapshot: DisplaySnapshot): string {
   const template = readFileSync(TEMPLATE, 'utf8');
   if (template.split(MARKER).length !== 2 || /<script|<iframe|<link|<img|<object|<embed|<svg|srcdoc|\bon[a-z][a-z0-9_-]*\s*=|javascript:|@import|url\(|https?:\/\//i.test(template)) throw new Error('unsafe_bundled_template');
   const d = snapshot.daily, w = snapshot.weekly;
-  const body = `${header(d, w)}<div class="v2-top-grid"><div class="v2-market-pane">${market(d)}</div></div>${operations(d)}${positions(d, w)}${events(d, w)}${dataNote(d, w)}`;
+  const environment = marketEnvironment(d);
+  const topClass = environment ? 'v2-top-grid v2-top-grid-with-environment' : 'v2-top-grid';
+  const body = `${header(d, w)}<div class="${topClass}"><div class="v2-market-pane">${market(d)}</div>${environment ? `<div class="v2-environment-pane">${environment}</div>` : ''}</div>${operations(d)}${positions(d, w)}${events(d, w)}${dataNote(d, w)}`;
   return template.replace(MARKER, `<div class="v2-shell"><main class="v2-unified-view">${body}</main></div>`).replace('<title>交易中心 · 盘前复盘 V2</title>', '<title>交易中心 · 复盘</title>');
 }

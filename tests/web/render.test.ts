@@ -5,6 +5,33 @@ import { render, nyInstant, calendarRows } from '../../skills/trading-center-rev
 import { fixture, weekly, snapshot, normalized, pythonRender, python } from './helpers.ts';
 import type { PlanDetail } from '../../skills/trading-center-review/web/types.ts';
 
+function withCloseEnvironment(v: any): any {
+  const identities = [
+    ['SPY.US', 'SPY', '标普 500 股票风险'], ['QQQ.US', 'QQQ', '纳斯达克 100 股票风险'],
+    ['IEF.US', 'IEF', '7–10 年美国国债价格风险，非收益率本体'], ['GLD.US', 'GLD', '黄金相关价格风险'],
+    ['USO.US', 'USO', '原油期货相关风险'], ['IBIT.US', 'IBIT', '比特币相关价格风险'],
+  ];
+  v.daily.market.items.forEach((row: any, index: number) => Object.assign(row, {
+    symbol: identities[index]![0], name: identities[index]![1], is_proxy: true, proxy_for: identities[index]![2],
+    session: '收盘', state: '已完成收盘', as_of: '2026-08-28T04:00:00Z', data_status: 'complete',
+  }));
+  Object.assign(v.daily.market, {
+    basis: 'completed_close', market_date: '2026-08-28',
+    environment: {
+      status: 'complete', headline: '权益收盘同步走强，市场风险偏好偏强，但仍需跨资产确认。',
+      pricing_signals: [
+        { label: '权益', text: 'SPY +0.50%，QQQ +0.80%' },
+        { label: '利率与避险代理', text: 'IEF +0.20%，GLD −0.10%' },
+        { label: '高波动与通胀代理', text: 'IBIT +1.10%，USO +0.30%' },
+      ],
+      cross_asset_confirmation: 'IBIT 与权益同向，高波动风险偏好得到确认。',
+      next_session_watch: '观察 SPY 与 QQQ 能否继续同向，并看 IBIT 是否保持确认。',
+    },
+  });
+  v.daily.meta.market_as_of = '2026-08-28T04:00:00Z';
+  return v;
+}
+
 for (const state of ['complete', 'partial', 'empty', 'stale']) test(`TS preserves the Python V2 DOM and all text for ${state}`, () => {
   const view = snapshot(state);
   assert.equal(normalized(render(view)), normalized(pythonRender(view)));
@@ -63,7 +90,7 @@ test('internal diagnostics stay out but economic revisions remain visible', () =
   assert.doesNotMatch(html, /<script|<iframe|onload=|onclick=/i);
 });
 test('radar keeps decision values while redundant premarket and verification UI stay private', () => {
-  const v = snapshot();
+  const v = withCloseEnvironment(snapshot());
   v.daily.market.items[0]!.value = 123.45;
   v.daily.market.items[0]!.change_pct = -1.25;
   v.daily.market.items[0]!.direction = 'down';
@@ -72,6 +99,9 @@ test('radar keeps decision values while redundant premarket and verification UI 
   assert.match(html, /<span>最新值<\/span><span>涨跌幅<\/span>/);
   assert.match(html, /v2-market-value"><strong>123\.45<\/strong>/);
   assert.match(html, /v2-market-direction[^>]*><strong>−1\.25%<\/strong>/);
+  assert.match(html, /市场环境判断/);
+  assert.match(html, /基于 2026-08-28 收盘/);
+  assert.match(html, /只记录上一交易日收盘定价，不随盘前或盘中行情刷新/);
   assert.doesNotMatch(html, /v2-meter-dot|aria-label="强度|<span>强度<\/span>|<span>状态<\/span>|v2-market-state/);
   assert.doesNotMatch(html, /Codex 盘前判断|待确认事项|周度判断与纪律|周度市场背景|Longbridge ·/);
   assert.equal(normalized(html), normalized(pythonRender(validate(v))));

@@ -165,7 +165,10 @@ NY_TZ = ZoneInfo("America/New_York")
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 UTC_TZ = dt.timezone.utc
 KNOWN_PROXY_SYMBOLS = frozenset(
-    {"SPY.US", "VOO.US", "QQQ.US", "GLD.US", "USO.US", "TLT.US", "IBIT.US"}
+    {"SPY.US", "VOO.US", "QQQ.US", "GLD.US", "USO.US", "IEF.US", "TLT.US", "IBIT.US"}
+)
+CLOSE_ENVIRONMENT_SYMBOLS = frozenset(
+    {"SPY.US", "QQQ.US", "IEF.US", "GLD.US", "USO.US", "IBIT.US"}
 )
 
 STATUS_LABELS = {
@@ -549,9 +552,40 @@ def _validate_child_statuses(
         )
 
 
+def _validate_market_environment(value: Any, path: str) -> Dict[str, Any]:
+    item = _object(value, path)
+    keys = {
+        "status",
+        "headline",
+        "pricing_signals",
+        "cross_asset_confirmation",
+        "next_session_watch",
+    }
+    _reject_unknown(item, keys, path)
+    _required_keys(item, keys, path)
+    _enum(item["status"], {"complete", "partial"}, f"{path}.status")
+    for key in ("headline", "cross_asset_confirmation", "next_session_watch"):
+        _text(item[key], f"{path}.{key}")
+    signals = _array(item["pricing_signals"], f"{path}.pricing_signals")
+    if not 1 <= len(signals) <= 3:
+        raise DashboardRenderError(f"{path}.pricing_signals must contain one to three items")
+    for index, raw in enumerate(signals):
+        signal_path = f"{path}.pricing_signals[{index}]"
+        signal = _object(raw, signal_path)
+        _reject_unknown(signal, {"label", "text"}, signal_path)
+        _required_keys(signal, {"label", "text"}, signal_path)
+        _text(signal["label"], f"{signal_path}.label")
+        _text(signal["text"], f"{signal_path}.text")
+    return item
+
+
 def _validate_market(value: Any) -> Dict[str, Any]:
     path = "$.market"
-    item = _validate_status_module(value, path, {"title", "source_scope", "items"})
+    item = _validate_status_module(
+        value,
+        path,
+        {"title", "source_scope", "items", "basis", "market_date", "environment"},
+    )
     _required_keys(item, {"title", "items"}, path)
     _text(item["title"], f"{path}.title")
     if "source_scope" in item:
@@ -657,6 +691,15 @@ def _validate_market(value: Any) -> Dict[str, Any]:
     if item["status"] == "empty" and rows:
         raise DashboardRenderError(f"{path} empty status cannot contain child items")
     _validate_child_statuses(item, path, child_statuses)
+    close_keys = {"basis", "market_date", "environment"}
+    if close_keys.intersection(item):
+        _required_keys(item, close_keys, path)
+        if item["basis"] != "completed_close":
+            raise DashboardRenderError(f"{path}.basis is unsupported")
+        _date_text(item["market_date"], f"{path}.market_date")
+        item["environment"] = _validate_market_environment(
+            item["environment"], f"{path}.environment"
+        )
     return item
 
 
@@ -1219,6 +1262,38 @@ def validate_packet(packet: Any, *, display_only: bool = False) -> Dict[str, Any
     if not display_only:
         validated["account"] = _validate_account(source["account"])
         validated["data_note"] = _validate_data_note(source["data_note"])
+    market = validated["market"]
+    if market.get("basis") == "completed_close":
+        if market["market_date"] != validated_meta["review_date"]:
+            raise DashboardRenderError("$.market.market_date must match $.meta.review_date")
+        rows_by_symbol = {row["symbol"].upper(): row for row in market["items"]}
+        if len(market["items"]) != len(CLOSE_ENVIRONMENT_SYMBOLS) or set(rows_by_symbol) != CLOSE_ENVIRONMENT_SYMBOLS:
+            raise DashboardRenderError(
+                "completed-close market requires the fixed six-symbol proxy set"
+            )
+        for symbol, row in rows_by_symbol.items():
+            if row["data_status"] != "complete":
+                continue
+            if row["session"] != "收盘" or row["state"] != "已完成收盘":
+                raise DashboardRenderError(
+                    f"$.market.items[{symbol}] must identify a completed close"
+                )
+            parsed = _rfc3339_timestamp(
+                row["as_of"], f"$.market.items[{symbol}].as_of"
+            )
+            if parsed.astimezone(NY_TZ).date().isoformat() != market["market_date"]:
+                raise DashboardRenderError(
+                    f"$.market.items[{symbol}].as_of must match the market date"
+                )
+        environment = market["environment"]
+        required = (rows_by_symbol["SPY.US"], rows_by_symbol["QQQ.US"])
+        if environment["status"] == "complete" and (
+            market["status"] != "complete"
+            or any(row["data_status"] != "complete" for row in required)
+        ):
+            raise DashboardRenderError(
+                "complete market environment requires complete close evidence"
+            )
     for key in keys - {"meta"}:
         if validated[key]["status"] == "blocked":
             raise DashboardRenderError(f"{key} status is blocked")
@@ -1701,6 +1776,12 @@ def _display_position_rows(positions: Mapping[str, Any]) -> List[Dict[str, Any]]
 
 def _render_header(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = None) -> str:
     meta = packet["meta"]
+    market = packet["market"]
+    cutoff = (
+        f'收盘口径 {_escape(market["market_date"])}（ET）'
+        if market.get("basis") == "completed_close"
+        else f'行情截至 {_escape(_time_label(meta["market_as_of"]))}'
+    )
     return f"""
       <header class="v2-header">
         <div class="v2-brand">
@@ -1717,8 +1798,8 @@ def _render_header(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
         </div>
       </header>
       <div class="v2-boundary-strip">
-        <span>{_ui(meta["review_label"], "盘前观察与交易纪律")}</span>
-        <span>行情截至 {_escape(_time_label(meta["market_as_of"]))}</span>
+        <span>{_ui(meta["review_label"], "每日复盘")}</span>
+        <span>{cutoff}</span>
       </div>
       {_render_weekly_context(weekly)}
     """
@@ -1774,18 +1855,53 @@ def _render_market(packet: Dict[str, Any]) -> str:
         if not rows
         else "".join(rows)
     )
+    basis_note = (
+        "涨跌幅相对前一已完成交易日收盘；代理价格不等同于指数或收益率。"
+        if market.get("basis") == "completed_close"
+        else "涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。"
+    )
     return f"""
       <section class="v2-market" aria-labelledby="market-heading">
         <div class="v2-section-title">
           <h1 id="market-heading">市场风险雷达</h1>
         </div>
-        <p class="v2-side-note">涨跌幅相对昨日收盘；代理价格不等同于指数或收益率。</p>
+        <p class="v2-side-note">{basis_note}</p>
         <div class="v2-market-head" role="row">
           <span>资产/指数</span><span>最新值</span><span>涨跌幅</span>
         </div>
         <div class="v2-market-list" role="table">
           {body}
         </div>
+      </section>
+    """
+
+
+def _render_market_environment(packet: Dict[str, Any]) -> str:
+    market = packet["market"]
+    environment = market.get("environment")
+    if environment is None:
+        return ""
+    signals = "".join(
+        f'<article class="v2-environment-signal"><strong>{_ui(row["label"])}</strong>'
+        f'<p>{_ui(row["text"])}</p></article>'
+        for row in environment["pricing_signals"]
+    )
+    return f"""
+      <section class="v2-judgement" aria-labelledby="environment-heading">
+        <div class="v2-section-title">
+          <h1 id="environment-heading">市场环境判断 <span>基于 {_escape(market['market_date'])} 收盘</span></h1>
+        </div>
+        <p class="v2-headline">{_ui(environment['headline'])}</p>
+        <div class="v2-environment-signals">{signals}</div>
+        <div class="v2-environment-summary">
+          <strong>跨资产确认</strong>
+          <p>{_ui(environment['cross_asset_confirmation'])}</p>
+        </div>
+        <div class="v2-environment-summary v2-environment-watch">
+          <strong>下一交易日观察</strong>
+          <p>{_ui(environment['next_session_watch'])}</p>
+        </div>
+        <p class="v2-environment-boundary">只记录上一交易日收盘定价，不随盘前或盘中行情刷新。</p>
       </section>
     """
 
@@ -2141,11 +2257,17 @@ def _render_events(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = No
 def _render_data_note(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] = None) -> str:
     # Raw diagnostics are intentionally not placed in hidden/collapsed HTML.
     weekly_time = _escape(_time_label(weekly["meta"]["generated_at"])) if weekly else "尚未生成"
+    market = packet["market"]
+    market_time = (
+        f"市场环境口径：{_escape(market['market_date'])} 已完成收盘（ET）"
+        if market.get("basis") == "completed_close"
+        else f"行情截至：{_escape(_time_label(packet['meta']['market_as_of']))}"
+    )
     return f"""
       <details class="v2-data-note">
         <summary><strong>更新与使用说明</strong><span>点击展开</span></summary>
         <div class="v2-data-content">
-          <p>行情截至：{_escape(_time_label(packet['meta']['market_as_of']))}</p>
+          <p>{market_time}</p>
           <p>周度更新：{weekly_time}。周度内容不随每日页面刷新而重新计算。</p>
           <p>刷新仅重载这份记录，不代表新行情；未确认的计划不能直接执行。</p>
         </div>
@@ -2371,12 +2493,15 @@ def _render_daily_content(
     validated: Dict[str, Any],
     weekly: Optional[Dict[str, Any]] = None,
 ) -> str:
+    environment = _render_market_environment(validated)
+    top_class = "v2-top-grid v2-top-grid-with-environment" if environment else "v2-top-grid"
     return (
         _render_header(validated, weekly)
-        + '<div class="v2-top-grid">'
+        + f'<div class="{top_class}">'
         + '<div class="v2-market-pane">'
         + _render_market(validated)
         + "</div>"
+        + (f'<div class="v2-environment-pane">{environment}</div>' if environment else "")
         + "</div>"
         + _render_operations(validated, weekly)
         + _render_positions(validated, weekly)

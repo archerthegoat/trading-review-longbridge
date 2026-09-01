@@ -27,6 +27,7 @@ V2 只接受以下输入：
 | order history | operations | 前一美股交易日的脱敏订单数量、窗口和标的级聚合 | 订单编号、完整订单行、价格和成本 |
 | order executions history | operations | 前一美股交易日的脱敏成交数量、窗口和标的级聚合 | 成交编号、完整成交行、价格和成本 |
 | quote | market | Longbridge 真实标的或代理的最新值、涨跌幅、阶段和时间 | 未返回标的的行情、指数本体与代理的等价性 |
+| kline history（固定收盘代理） | market | 六个已批准代理的 review_date 与前一根已完成 1D 收盘、日期和机械涨跌幅 | 盘前/盘中状态、宏观因果、指数本体、未来走势 |
 | capital | market | 标的级资金流、标的和时间窗口 | 全市场资金流、市场方向或因果关系 |
 | market-temp | market | Longbridge 返回的市场温度及时间 | 风险偏好的确定性结论 |
 | finance-calendar | events | 相关美股财报或有风险通道的事件、双时区、状态和来源 | 与持仓/计划无关的事件、无来源的事件影响 |
@@ -45,6 +46,7 @@ capital 只能写作“标的资金流”。不得用价格乘成交量推断资
 - RFC3339 必须含 `T`、秒和时区；纽约端点必须精确为 review_date 当地 00:00:00 至次日当地 00:00:00，America/New_York offset 与相应日期由 ZoneInfo 验证，UTC 端点必须与纽约端点表示同一时刻。
 - generated_at 必须是带 `+08:00` offset 的 Asia/Shanghai RFC3339 时间。
 - market_as_of 和 account_snapshot_at 必须各自保留来源时间。
+- 收盘市场环境使用 review_date 对应的已完成 1D bar；六个代理不能混入盘前、夜盘或读取时 quote。页面明确显示 `基于 YYYY-MM-DD 收盘`，刷新静态页面不改变该日期。
 - 当前持仓和账户均为读取时快照，不代表收盘持仓或完整对账。
 
 只有成功解析的订单/成交空数组才可显示“该窗口返回 0 条”。接口失败、限流、部分返回或关键字段缺失必须标为 partial 或 blocked，不得变成空数组。
@@ -79,6 +81,8 @@ capital 只能写作“标的资金流”。不得用价格乘成交量推断资
 - 美国十年期国债收益率或 Longbridge 可用代理。
 
 每次先查询 Longbridge 实际支持的标的。如果只能使用 ETF 或其他代理，必须展示 Longbridge 返回的真实标的名称，并明确它是代理。不得捏造 symbol，不得把代理名称改写成指数本身。
+
+收盘环境判断固定使用 `SPY.US`、`QQQ.US`、`IEF.US`、`GLD.US`、`USO.US`、`IBIT.US`。`SPY.US` 与 `QQQ.US` 必须同时存在于 review_date 且各有前一完成收盘，才能形成环境结论；六项齐备才可把跨资产确认标为 complete。判断只能写作收盘价格所反映的定价倾向，不能把同日价格变化写成已证明的宏观驱动。
 
 市场 item 必须同时提供 `is_proxy` 布尔值和 `proxy_for`：代理时为 true 且 proxy_for 非空，非代理时为 false 且 proxy_for 为 null。页面只有在已声明代理时才显示代理关系。
 

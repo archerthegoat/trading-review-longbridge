@@ -26,6 +26,46 @@ def fixture(name: str):
     return json.loads((FIXTURES / f"dashboard_v2_{name}.json").read_text(encoding="utf-8"))
 
 
+def completed_close_packet():
+    packet = fixture("complete")
+    identities = (
+        ("SPY.US", "SPY", "标普 500 股票风险"),
+        ("QQQ.US", "QQQ", "纳斯达克 100 股票风险"),
+        ("IEF.US", "IEF", "7–10 年美国国债价格风险，非收益率本体"),
+        ("GLD.US", "GLD", "黄金相关价格风险"),
+        ("USO.US", "USO", "原油期货相关风险"),
+        ("IBIT.US", "IBIT", "比特币相关价格风险"),
+    )
+    for row, (symbol, name, proxy_for) in zip(packet["market"]["items"], identities):
+        row.update(
+            symbol=symbol,
+            name=name,
+            is_proxy=True,
+            proxy_for=proxy_for,
+            session="收盘",
+            state="已完成收盘",
+            as_of="2026-08-28T04:00:00Z",
+            data_status="complete",
+        )
+    packet["market"].update(
+        basis="completed_close",
+        market_date="2026-08-28",
+        environment={
+            "status": "complete",
+            "headline": "权益收盘同步走强，市场风险偏好偏强，但仍需跨资产确认。",
+            "pricing_signals": [
+                {"label": "权益", "text": "SPY +0.50%，QQQ +0.80%"},
+                {"label": "利率与避险代理", "text": "IEF +0.20%，GLD −0.10%"},
+                {"label": "高波动与通胀代理", "text": "IBIT +1.10%，USO +0.30%"},
+            ],
+            "cross_asset_confirmation": "IBIT 与权益同向，高波动风险偏好得到确认。",
+            "next_session_watch": "观察 SPY 与 QQQ 能否继续同向，并看 IBIT 是否保持确认。",
+        },
+    )
+    packet["meta"]["market_as_of"] = "2026-08-28T04:00:00Z"
+    return packet
+
+
 def weekly_packet():
     base_item = {
         "label": "示例",
@@ -160,10 +200,11 @@ class DashboardV2RendererTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.DashboardRenderError, "conflicts"):
             MODULE.validate_packet(packet)
 
-    def test_page_order_omits_redundant_premarket_and_market_status(self):
-        rendered = self.render(fixture("complete"))
+    def test_page_order_uses_close_environment_without_backend_status(self):
+        rendered = self.render(completed_close_packet())
         labels = [
             "市场风险雷达",
+            "市场环境判断",
             "上一交易日成交",
             "持仓 × 计划",
             "重要事件与时间轴",
@@ -171,9 +212,11 @@ class DashboardV2RendererTests(unittest.TestCase):
         ]
         positions = [rendered.index(label) for label in labels]
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("v2-top-grid", rendered)
+        self.assertIn("v2-top-grid-with-environment", rendered)
         template = TEMPLATE_PATH.read_text(encoding="utf-8")
-        self.assertIn("grid-template-columns: 1fr", template)
+        self.assertIn("grid-template-columns: minmax(0, 1.18fr) minmax(280px, .82fr)", template)
+        self.assertIn("基于 2026-08-28 收盘", rendered)
+        self.assertIn("只记录上一交易日收盘定价，不随盘前或盘中行情刷新。", rendered)
         for removed in ("Codex 盘前判断", "待确认事项", "周度判断与纪律", "周度市场背景"):
             self.assertNotIn(removed, rendered)
         self.assertNotIn('<span>状态</span>', rendered)

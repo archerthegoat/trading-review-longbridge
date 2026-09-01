@@ -124,9 +124,16 @@
       grid-template-columns: 1fr;
       border-bottom: 1px solid var(--v2-line);
     }
+    .v2-top-grid-with-environment {
+      grid-template-columns: minmax(0, 1.18fr) minmax(280px, .82fr);
+    }
     .v2-market-pane {
       min-width: 0;
     }
+    .v2-top-grid-with-environment .v2-market-pane {
+      border-right: 1px solid var(--v2-line);
+    }
+    .v2-environment-pane { min-width: 0; }
     .v2-market, .v2-judgement, .v2-operations, .v2-plans, .v2-events {
       min-width: 0;
       padding: 20px;
@@ -234,6 +241,38 @@
       font-weight: 680;
       line-height: 1.7;
       overflow-wrap: anywhere;
+    }
+    .v2-environment-signals {
+      display: grid;
+      gap: 8px;
+    }
+    .v2-environment-signal,
+    .v2-environment-summary {
+      padding: 11px 12px;
+      border: 1px solid var(--v2-line-soft);
+      border-radius: 7px;
+      background: var(--v2-panel);
+    }
+    .v2-environment-signal strong,
+    .v2-environment-summary strong {
+      color: var(--v2-ink-soft);
+      font-size: 12px;
+    }
+    .v2-environment-signal p,
+    .v2-environment-summary p {
+      margin-top: 3px;
+      color: var(--v2-ink-soft);
+      overflow-wrap: anywhere;
+    }
+    .v2-environment-summary { margin-top: 10px; }
+    .v2-environment-watch {
+      border-color: #d7e3f7;
+      background: var(--v2-blue-soft);
+    }
+    .v2-environment-boundary {
+      margin-top: 10px;
+      color: var(--v2-muted);
+      font-size: 11px;
     }
     .v2-analysis-grid {
       display: grid;
@@ -671,8 +710,6 @@
       .v2-header-meta { justify-content: flex-start; }
       .v2-header-cutoff { grid-column: 1 / -1; }
       .v2-boundary-strip { padding: 5px 16px; }
-      .v2-top-grid { grid-template-columns: 1fr; }
-      .v2-market-pane { border-right: 0; border-bottom: 1px solid var(--v2-line); }
       .v2-calendar-weeks { grid-template-columns: 1fr; }
     }
     @media (max-width: 900px) {
@@ -688,6 +725,11 @@
       .v2-brand { flex: 1 1 100%; }
       .v2-header-meta { flex: 1 1 auto; }
       .v2-header-cutoff { flex: 1 1 auto; }
+      .v2-top-grid-with-environment { grid-template-columns: 1fr; }
+      .v2-top-grid-with-environment .v2-market-pane {
+        border-right: 0;
+        border-bottom: 1px solid var(--v2-line);
+      }
       .v2-market, .v2-judgement, .v2-operations, .v2-plans, .v2-events { padding: 16px; }
       .v2-judgement { padding-top: 18px; }
       .v2-analysis-grid { grid-template-columns: 1fr; }

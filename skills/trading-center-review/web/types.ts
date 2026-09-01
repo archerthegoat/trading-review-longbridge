@@ -42,7 +42,10 @@ export interface Daily {
   meta: { review_label: string; review_date: string; generated_at: string; market_as_of: string;
     previous_trading_window: { label: string; market_date: string; ny_start: string; ny_end: string; utc_start: string; utc_end: string };
     period_label: string; overall_status: Status };
-  market: Module & { source_scope?: string; items: {
+  market: Module & { source_scope?: string; basis?: 'completed_close'; market_date?: string;
+    environment?: { status: 'complete' | 'partial'; headline: string; pricing_signals: LabeledText[];
+      cross_asset_confirmation: string; next_session_watch: string };
+    items: {
     name: string; symbol: string; is_proxy: boolean; proxy_for: string | null;
     value: number | null; change_pct: number | null; direction: Direction; strength: number;
     state: string; session: string; as_of: string; risk_note: string; data_status: Status; unavailable_reason?: string;

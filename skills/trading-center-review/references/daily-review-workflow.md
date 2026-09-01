@@ -9,6 +9,7 @@
 - 当前账户和 positions 读取时快照。
 - 前一交易日订单/成交聚合。
 - Longbridge 可用的 quote、capital、market-temp、finance-calendar、macrodata 和明确授权的 profit-analysis 字段。
+- 已单独批准的六个市场代理最近两根已完成 1D 收盘；只用于收盘市场环境，不与 quote 混用。
 - 当前周计划、已确认每日增量和明确候选池。
 
 当前快照不能替代历史、收盘或完整账户事实。快照净变化必须与订单/成交勾稽分开。
@@ -22,7 +23,8 @@
 5. 运行 `daily-analysis-plan`。`run_codex` 才生成新 Codex 固定 JSON；`reuse` 原样使用缓存中的 model、status、generated_at 和 output。
 6. 把选定分析与同一事实包合并为 `trading-review-incremental-input.v1`，运行 `ingest-daily` 并回读 `run-manifest.json`。
 7. 用同一事实边界生成私有 Markdown、V2 JSON 和 standalone HTML。
-8. 当前机器已明确安装常驻服务时，读取 [本地展示发布指引](local-web-service.md)，用 `node skills/trading-center-review/web/cli.ts publish --daily-input ...` 发布；未提供新周度输入时复用持久周度。未启用服务则保持私有 HTML，不自行安装或改调度。
+8. 日度市场环境启用时，运行 `refresh_market_close_environment.py`：它只读取固定六个公开代理，以 review_date 与前一完成日线替换市场雷达，并在同一私有展示快照中生成可追溯的收盘定价判断。命令失败不覆盖上次成功页；权益基准不齐则明确不形成判断。
+9. 当前机器已明确安装常驻服务时，读取 [本地展示发布指引](local-web-service.md)，用 `node skills/trading-center-review/web/cli.ts publish --daily-input ...` 或经校验的 `--display-input ...` 发布；未提供新周度输入时复用持久周度。未启用服务则保持私有 HTML，不自行安装或改调度。
 
 生成页面前可只读最近周度 revision，用同一 renderer 合入原模块；不刷新周度时间、不写周度表。计划区间由已保存版本提供，`trade_plan_lifecycle.py enrich-daily` 只把区间卡片合入既有标的行。quote 只更新关系，不能移动区间；构造新 draft 或确认版本不是每日自动动作。
 
