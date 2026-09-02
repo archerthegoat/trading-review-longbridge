@@ -1,0 +1,4 @@
+interface:
+  display_name: "每日交易日记"
+  short_description: "按计划核对上一美股交易日的脱敏交易动作"
+  default_prompt: "Use $daily-trade-journal to draft the previous completed NY trading day's sanitized actions and plan alignment; do not write Obsidian until I say 确认写入."
