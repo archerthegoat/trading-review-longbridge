@@ -846,15 +846,15 @@ class DashboardV2RendererTests(unittest.TestCase):
         before = copy.deepcopy(packet)
         rendered = self.render(packet)
         # Legacy free-text rows are admitted only for compatibility and are
-        # rendered as a neutral, pending structured row.  Their display_name,
-        # action and role text cannot establish a trade type or plan relation.
-        self.assertIn("成交 · DEMO.HEDGE", rendered)
-        self.assertIn("工具待确认 · 待确认", rendered)
-        for marker in ("已成交占位", "未成交委托占位", "仅文案声称成交占位", "提交订单", "987654", "订单 <strong>"):
-            self.assertNotIn(marker, rendered)
+        # rendered as a neutral action on the symbol derived from its safe
+        # ticker. Their free text cannot establish direction or instrument.
+        operations = rendered.split('<section class="v2-operations"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("<strong>DEMO.HEDGE</strong><span>成交</span>", operations)
+        for marker in ("已成交占位", "未成交委托占位", "仅文案声称成交占位", "提交订单", "987654", "订单 <strong>", "工具待确认", "来源：", "已确认计划", "计划外"):
+            self.assertNotIn(marker, operations)
         self.assertEqual(packet, before)
 
-    def test_structured_operations_show_safe_type_and_plan_status(self):
+    def test_structured_operations_show_safe_option_action_without_plan_metadata(self):
         packet = fixture("complete")
         row = packet["operations"]["items"][0]
         row.clear()
@@ -871,12 +871,89 @@ class DashboardV2RendererTests(unittest.TestCase):
             reconciliation="合成内部勾稽，不进入展示。",
         )
         rendered = self.render(packet)
-        self.assertIn("买入 · DEMO", rendered)
-        self.assertIn("Long Call · 已确认计划", rendered)
-        self.assertNotIn("Long Call Call", rendered)
-        self.assertIn("来源：合成的成交前确认计划已匹配", rendered)
-        self.assertIn("合成的成交前确认计划已匹配", rendered)
-        self.assertNotIn("合成内部勾稽，不进入展示", rendered)
+        operations = rendered.split('<section class="v2-operations"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("<strong>DEMO</strong><span>买入 Long Call</span>", operations)
+        for marker in ("Long Call · 已确认计划", "Long Call Call", "来源：", "合成的成交前确认计划已匹配", "合成内部勾稽，不进入展示", "已确认计划", "计划外", "工具待确认", "正股"):
+            self.assertNotIn(marker, operations)
+
+    def test_operations_group_by_underlying_and_deduplicate_action_labels(self):
+        packet = fixture("complete")
+        base = packet["operations"]["items"][0]
+
+        def row(symbol, side, trade_type="stock", option_right=None, count=1, display_name="合并标的"):
+            return {
+                "symbol": symbol,
+                "display_name": display_name,
+                "side": side,
+                "trade_type": trade_type,
+                "option_right": option_right,
+                "plan_status": "unknown",
+                "plan_status_note": "仅用于结构化校验",
+                "execution_count": count,
+                "data_status": "complete",
+            }
+
+        packet["operations"]["items"] = [
+            row("DEMO.US", "buy"),
+            row("DEMO.US", "sell"),
+            row("DEMO.US:OPTION", "buy", "zero_dte_option", "call"),
+            row("DEMO.US:OPTION", "buy", "zero_dte_option", "call"),
+            row("DEMO.US:OPTION", "sell", "zero_dte_option", "put"),
+        ]
+        packet["operations"]["executions"]["count"] = 5
+        rendered = self.render(packet)
+        operations = rendered.split('<section class="v2-operations"', 1)[1].split("</section>", 1)[0]
+        self.assertEqual(operations.count('<li><strong>'), 1)
+        self.assertIn("<strong>合并标的</strong><span>买入 · 卖出 · 买入 0DTE Call · 卖出 0DTE Put</span>", operations)
+        self.assertIn("按标的汇总实际成交", operations)
+        for marker in ("正股", "单股杠杆 ETF", "工具待确认", "来源：", "已确认计划", "与计划不一致", "计划外", "待确认"):
+            self.assertNotIn(marker, operations)
+
+    def test_operations_keep_direction_only_for_ordinary_tickers(self):
+        packet = fixture("complete")
+        packet["operations"]["items"] = [
+            {
+                "symbol": "SNDK.US",
+                "display_name": "SNDK",
+                "side": "sell",
+                "trade_type": "stock",
+                "option_right": None,
+                "plan_status": "unknown",
+                "plan_status_note": "结构化校验",
+                "execution_count": 1,
+                "data_status": "complete",
+            },
+            {
+                "symbol": "NVDL.US",
+                "display_name": "NVDL",
+                "side": "buy",
+                "trade_type": "single_stock_leveraged_etf",
+                "option_right": None,
+                "plan_status": "mismatch",
+                "plan_status_note": "结构化校验",
+                "execution_count": 1,
+                "data_status": "complete",
+            },
+            {
+                "symbol": "UNKNOWN.US",
+                "display_name": "UNKNOWN",
+                "side": "sell",
+                "trade_type": "unknown",
+                "option_right": None,
+                "plan_status": "outside_plan",
+                "plan_status_note": "结构化校验",
+                "execution_count": 1,
+                "data_status": "complete",
+            },
+        ]
+        packet["operations"]["executions"]["count"] = 3
+        rendered = self.render(packet)
+        operations = rendered.split('<section class="v2-operations"', 1)[1].split("</section>", 1)[0]
+        self.assertIn("<strong>SNDK</strong><span>卖出</span>", operations)
+        self.assertIn("<strong>NVDL</strong><span>买入</span>", operations)
+        self.assertIn("<strong>UNKNOWN</strong><span>卖出</span>", operations)
+        for marker in ("正股", "单股杠杆 ETF", "工具待确认", "来源：", "已确认计划", "与计划不一致", "计划外", "待确认"):
+            self.assertNotIn(marker, operations)
 
     def test_structured_operation_requires_all_replacement_fields(self):
         packet = fixture("complete")

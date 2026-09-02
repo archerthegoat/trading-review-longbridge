@@ -536,4 +536,4 @@ LaunchAgent `com.marstradingcenter.web-ui` 使用绝对 Node 路径、固定安�
 
 `refresh_daily_operations.py` 复用已有 owner-only 成交工件与 SQLite v5 只读连接，严格拒绝混合 review date、未知结构、总数不一致和覆盖既有输出；成功结果通过 `trading-review-display.v1` 校验后才可进入现有 publish 入口。它不调用 Longbridge、不迁移或写数据库、不修改计划、Bridge、Obsidian、自动化或服务绑定。失败保持旧 publication；源码回滚使用精确 revert，页面回滚使用既有上一成功 publication，数据库不回滚。
 
-本实现对应 Python/TypeScript 同一静态 DOM：成交行只渲染安全方向、类型/右侧、计划关系和说明。合成回归覆盖 0DTE Call/Put、普通期权无计划、精确 Long Call 计划、同 underlying 错工具、工具证据不足、计划生效晚于成交、零/缺失/partial/stale/expired、隐私过滤和输入不变性。自动测试不等于浏览器或人工验收；本节人工验收保持 **PENDING**，除非用户针对确切 commit/build 明确记录 PASS。
+本实现对应 Python/TypeScript 同一静态 DOM：成交卡按 canonical underlying 合并为一标的一行，普通 ticker 只渲染安全买入/卖出方向，期权保留 0DTE 与 Call/Put 等最小机械标签；不渲染工具判断、计划关系、来源说明或具体合约身份。合成回归覆盖同 underlying 的多行、双向动作去重、0DTE Call/Put、普通 ticker、普通期权无计划、精确 Long Call 计划、同 underlying 错工具、工具证据不足、计划生效晚于成交、零/缺失/partial/stale/expired、隐私过滤和输入不变性。自动测试不等于浏览器或人工验收；本节人工验收保持 **PENDING**，除非用户针对确切 commit/build 明确记录 PASS。

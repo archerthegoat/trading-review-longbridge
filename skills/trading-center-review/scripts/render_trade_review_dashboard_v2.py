@@ -1490,6 +1490,72 @@ def _normalize_display_operation(row: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+_OPERATION_NAME_FORBIDDEN_RE = re.compile(
+    r"(?:正股|单股杠杆\s*ETF|工具待确认|Long\s+Call|0DTE|期权|"
+    r"已确认计划|与计划不一致|计划外|待确认|来源\s*[:：])",
+    re.IGNORECASE,
+)
+
+
+def _operation_underlying(symbol: str) -> str:
+    """Return the safe, canonical display key shared by stock and option rows."""
+
+    return symbol.upper().removesuffix(":OPTION").removesuffix(".US")
+
+
+def _operation_display_name(row: Mapping[str, Any]) -> str:
+    """Keep a safe human name without allowing it to carry tool/plan labels."""
+
+    candidate = str(row["display_name"])
+    if (
+        PRIVATE_DIAGNOSTIC_RE.search(candidate)
+        or NON_US_SYMBOL_RE.search(candidate)
+        or _OPERATION_NAME_FORBIDDEN_RE.search(candidate)
+    ):
+        return _operation_underlying(str(row["symbol"]))
+    return candidate
+
+
+def _operation_action_label(row: Mapping[str, Any]) -> str:
+    """Translate one admitted fill to the smallest useful user-facing action."""
+
+    side = {"buy": "买入", "sell": "卖出", "other": "成交"}[row["side"]]
+    right = {"call": "Call", "put": "Put"}.get(row.get("option_right"))
+    trade_type = row["trade_type"]
+    if trade_type == "zero_dte_option" and right:
+        return f"{side} 0DTE {right}"
+    if trade_type == "long_call":
+        return f"{side} Long Call"
+    if trade_type == "other_option" and right:
+        return f"{side} {right}"
+    if trade_type == "unknown" and right and str(row["symbol"]).upper().endswith(":OPTION"):
+        return f"{side} {right}"
+    # Ordinary tickers deliberately show only the verified direction.  This
+    # also keeps legacy/unknown rows neutral without inventing an instrument.
+    return side
+
+
+def _group_display_operations(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Group filled rows by underlying and de-duplicate their action labels."""
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for raw in rows:
+        row = _normalize_display_operation(raw)
+        key = _operation_underlying(str(row["symbol"]))
+        group = grouped.setdefault(
+            key,
+            {
+                "underlying": key,
+                "display_name": _operation_display_name(row),
+                "actions": [],
+            },
+        )
+        action = _operation_action_label(row)
+        if action not in group["actions"]:
+            group["actions"].append(action)
+    return list(grouped.values())
+
+
 def _float_decimal(value: Any, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         raise DashboardRenderError(f"{path} must be a decimal")
@@ -2029,7 +2095,7 @@ def _render_operations(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] 
     filled_items = [row for row in us_items if (row.get("execution_count") or 0) > 0 and row["data_status"] not in {"empty", "blocked"}]
     confirmed_total = scoped and executions["data_status"] in {"complete", "empty"} and executions["count"] is not None
     if filled_items:
-        items = "".join(_render_operation_item(row) for row in filled_items)
+        items = "".join(_render_operation_item(row) for row in _group_display_operations(filled_items))
         if confirmed_total and sum(row["execution_count"] for row in filled_items) < executions["count"]:
             items += '<li class="v2-empty-inline">另有成交明细尚待核对。</li>'
     elif confirmed_total and executions["count"] == 0:
@@ -2041,7 +2107,7 @@ def _render_operations(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] 
       <section class="v2-operations" aria-labelledby="operations-heading">
         <div class="v2-section-title">
           <h1 id="operations-heading">上一交易日成交</h1>
-          <span class="v2-section-note">只看实际成交 · 对照事前计划</span>
+          <span class="v2-section-note">按标的汇总实际成交</span>
         </div>
         <div class="v2-operation-meta">
           <span>{_escape(packet["meta"]["review_date"])} · 纽约交易日</span>
@@ -2053,28 +2119,9 @@ def _render_operations(packet: Dict[str, Any], weekly: Optional[Dict[str, Any]] 
 
 
 def _render_operation_item(row: Mapping[str, Any]) -> str:
-    item = _normalize_display_operation(row)
-    side = {"buy": "买入", "sell": "卖出", "other": "成交"}[item["side"]]
-    trade_type = {
-        "stock": "正股",
-        "single_stock_leveraged_etf": "单股杠杆 ETF",
-        "long_call": "Long Call",
-        "zero_dte_option": "0DTE",
-        "other_option": "其他期权",
-        "unknown": "工具待确认",
-    }[item["trade_type"]]
-    if item["option_right"] is not None and item["trade_type"] != "long_call":
-        trade_type += " Call" if item["option_right"] == "call" else " Put"
-    plan_status = {
-        "confirmed_plan": "已确认计划",
-        "mismatch": "与计划不一致",
-        "outside_plan": "计划外",
-        "unknown": "待确认",
-    }[item["plan_status"]]
     return (
-        f'<li><strong>{_escape(side)} · {_ui(item["display_name"])}</strong>'
-        f'<span>{_escape(trade_type)} · {_escape(plan_status)}</span>'
-        f'<small>来源：{_ui(item["plan_status_note"], "计划关系待核对")}</small></li>'
+        f'<li><strong>{_ui(row["display_name"])}</strong>'
+        f'<span>{_escape(" · ".join(row["actions"]))}</span></li>'
     )
 
 

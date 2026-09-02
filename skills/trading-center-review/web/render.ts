@@ -104,21 +104,46 @@ function marketEnvironment(d: Daily): string {
     : '<p class="v2-environment-empty">该收盘日暂无可展示的分析证据。</p>';
   return `<section class="v2-judgement" aria-labelledby="environment-heading"><div class="v2-section-title"><h1 id="environment-heading">市场环境判断 <span>基于 ${escape(m.market_date)} 收盘</span></h1></div><p class="v2-headline">${ui(environment.headline)}</p><div class="v2-environment-summary"><strong>支持事实</strong>${evidenceBlock}</div><div class="v2-environment-summary v2-environment-watch"><strong>下一交易日验证</strong><p>${ui(environment.next_session_watch)}</p></div><p class="v2-environment-boundary">只基于该收盘日的公开市场收盘分析，不随盘前或盘中行情刷新。</p></section>`;
 }
+
+const operationNameForbidden = /(?:正股|单股杠杆\s*ETF|工具待确认|Long\s+Call|0DTE|期权|已确认计划|与计划不一致|计划外|待确认|来源\s*[:：])/i;
+const operationUnderlying = (symbol: string) => symbol.toUpperCase().replace(/:OPTION$/i, '').replace(/\.US$/i, '');
+function operationDisplayName(row: Daily['operations']['items'][number]): string {
+  const candidate = row.display_name;
+  return diagnostic.test(candidate) || nonUS.test(candidate) || operationNameForbidden.test(candidate)
+    ? operationUnderlying(row.symbol)
+    : candidate;
+}
+function operationActionLabel(row: Daily['operations']['items'][number]): string {
+  const side = { buy: '买入', sell: '卖出', other: '成交' }[row.side];
+  const right = row.option_right === 'call' ? 'Call' : row.option_right === 'put' ? 'Put' : '';
+  if (row.trade_type === 'zero_dte_option' && right) return `${side} 0DTE ${right}`;
+  if (row.trade_type === 'long_call') return `${side} Long Call`;
+  if (row.trade_type === 'other_option' && right) return `${side} ${right}`;
+  if (row.trade_type === 'unknown' && right && row.symbol.toUpperCase().endsWith(':OPTION')) return `${side} ${right}`;
+  // Ordinary tickers deliberately show only the verified direction. This
+  // also keeps legacy/unknown rows neutral without inventing an instrument.
+  return side;
+}
+function groupDisplayOperations(rows: Daily['operations']['items']): { displayName: string; actions: string[] }[] {
+  const groups = new Map<string, { displayName: string; actions: string[] }>();
+  for (const row of rows) {
+    const key = operationUnderlying(row.symbol);
+    const group = groups.get(key) ?? { displayName: operationDisplayName(row), actions: [] };
+    const action = operationActionLabel(row);
+    if (!group.actions.includes(action)) group.actions.push(action);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
 function operations(d: Daily): string {
   const o = d.operations, e = o.executions;
   const us = o.items.filter(r => isUS(r.symbol));
   const filled = us.filter(r => (r.execution_count ?? 0) > 0 && !['empty', 'blocked'].includes(r.data_status));
   const confirmed = o.market_scope === 'US' && us.length === o.items.length && ['complete', 'empty'].includes(e.data_status) && e.count !== null;
-  const side = { buy: '买入', sell: '卖出', other: '成交' } as const;
-  const tradeType = { stock: '正股', single_stock_leveraged_etf: '单股杠杆 ETF', long_call: 'Long Call', zero_dte_option: '0DTE', other_option: '其他期权', unknown: '工具待确认' } as const;
-  const planStatus = { confirmed_plan: '已确认计划', mismatch: '与计划不一致', outside_plan: '计划外', unknown: '待确认' } as const;
-  let rows = filled.map(r => {
-    const right = r.option_right === null || r.trade_type === 'long_call' ? '' : r.option_right === 'call' ? ' Call' : ' Put';
-    return `<li><strong>${side[r.side]} · ${ui(r.display_name)}</strong><span>${tradeType[r.trade_type]}${right} · ${planStatus[r.plan_status]}</span><small>来源：${ui(r.plan_status_note, '计划关系待核对')}</small></li>`;
-  }).join('');
+  let rows = groupDisplayOperations(filled).map(r => `<li><strong>${ui(r.displayName)}</strong><span>${escape(r.actions.join(' · '))}</span></li>`).join('');
   if (filled.length && confirmed && filled.reduce((n, r) => n + r.execution_count!, 0) < e.count!) rows += '<li class="v2-empty-inline">另有成交明细尚待核对。</li>';
   if (!rows) rows = confirmed && e.count === 0 ? '<li class="v2-empty-inline">上一交易日无已成交记录。</li>' : '<li class="v2-empty-inline">成交明细尚待核对。</li>';
-  return `<section class="v2-operations" aria-labelledby="operations-heading"><div class="v2-section-title"><h1 id="operations-heading">上一交易日成交</h1><span class="v2-section-note">只看实际成交 · 对照事前计划</span></div><div class="v2-operation-meta"><span>${escape(d.meta.review_date)} · 纽约交易日</span>${e.data_status === 'stale' ? '<span>成交记录较旧，请重新核对。</span>' : ''}</div><ul class="v2-operations-list">${rows}</ul></section>`;
+  return `<section class="v2-operations" aria-labelledby="operations-heading"><div class="v2-section-title"><h1 id="operations-heading">上一交易日成交</h1><span class="v2-section-note">按标的汇总实际成交</span></div><div class="v2-operation-meta"><span>${escape(d.meta.review_date)} · 纽约交易日</span>${e.data_status === 'stale' ? '<span>成交记录较旧，请重新核对。</span>' : ''}</div><ul class="v2-operations-list">${rows}</ul></section>`;
 }
 function planDetail(d: PlanDetail | null | undefined): string {
   if (!d) return '';
