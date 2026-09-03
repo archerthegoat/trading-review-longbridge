@@ -87,7 +87,29 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
         ]
         if private_preview is not None:
             command.extend(["--private-preview", str(private_preview)])
-        return subprocess.run(command, capture_output=True, text=True, check=False)
+        bootstrap = """
+import importlib.util
+from pathlib import Path
+import sys
+
+script = Path(sys.argv[1])
+private_root = Path(sys.argv[2]).resolve()
+arguments = sys.argv[3:]
+spec = importlib.util.spec_from_file_location("project_daily_trade_journal", script)
+if spec is None or spec.loader is None:
+    raise RuntimeError("could not load daily trade journal projector")
+project = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = project
+spec.loader.exec_module(project)
+project.PRIVATE_PREVIEW_ROOT = private_root
+raise SystemExit(project.main(arguments))
+        """
+        return subprocess.run(
+            [sys.executable, "-c", bootstrap, str(SCRIPT), str(root.resolve()), *command[2:]],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def version(
         self,
@@ -193,7 +215,6 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
     def test_private_preview_is_opt_in_and_cli_writes_owner_only_markdown(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="daily-trade-journal-private-",
-            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
         ) as directory:
             root = Path(directory).resolve()
             os.chmod(root, 0o700)
@@ -230,7 +251,6 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
         for symbol in malformed:
             with self.subTest(symbol=symbol), tempfile.TemporaryDirectory(
                 prefix="daily-trade-journal-malformed-",
-                dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
             ) as directory:
                 root = Path(directory).resolve()
                 os.chmod(root, 0o700)
@@ -246,7 +266,6 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
     def test_private_preview_path_rejects_relative_symlink_unsafe_and_colliding_targets(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="daily-trade-journal-private-path-",
-            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
         ) as directory:
             root = Path(directory).resolve()
             os.chmod(root, 0o700)
@@ -276,10 +295,17 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
             self.assertNotEqual(collision.returncode, 0)
             self.assertFalse(output.exists())
 
+            with tempfile.TemporaryDirectory(
+                prefix="daily-trade-journal-private-outside-",
+            ) as outside_directory:
+                outside_preview = Path(outside_directory).resolve() / "preview.md"
+                outside = self.run_cli(root, raw, output, private_preview=outside_preview)
+                self.assertNotEqual(outside.returncode, 0)
+                self.assertFalse(outside_preview.exists())
+
     def test_private_preview_existing_unsafe_file_is_not_overwritten(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="daily-trade-journal-private-existing-",
-            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
         ) as directory:
             root = Path(directory).resolve()
             os.chmod(root, 0o700)
@@ -299,7 +325,6 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
     def test_preflight_collisions_and_invalid_private_path_never_overwrite_targets(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="daily-trade-journal-preflight-",
-            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
         ) as directory:
             root = Path(directory).resolve()
             os.chmod(root, 0o700)
