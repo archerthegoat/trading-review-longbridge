@@ -1,4 +1,4 @@
 interface:
-  display_name: "每日交易日记"
-  short_description: "按用户叙述持续维护持仓管理与计划买入想法，并在确认后保存到知识库"
-  default_prompt: "Use $daily-trade-journal to read current plan records and related old diaries, update 持仓管理 or 计划买入 from my current narration while preserving 考虑 or 可能 language, optionally add completed-1D technical context, and wait for 确认写入 before saving."
+  display_name: "交易日记助手"
+  short_description: "以对话采访梳理多周期 PA、持仓管理与计划买入，确认后保存到 Obsidian"
+  default_prompt: "$daily-trade-journal 请先读现有计划和相关日记，再采访本次想法，按需核对指定周期 PA，展示草稿并等待“确认写入”后保存到 Obsidian。"
