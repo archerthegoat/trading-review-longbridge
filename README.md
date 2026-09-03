@@ -1,110 +1,36 @@
-# Daily Trade Journal
+# 每日交易日记
 
-一个极简、隐私优先的 Codex 每日交易日记 Skill。
+`daily-trade-journal` 是一个以用户叙述为中心的 Obsidian Markdown 记录入口，不是交易执行器、账户看板，也不要求先完成机器计划对齐。
 
-它每天只做两件事：
+## 两类记录
 
-1. 汇总上一已完成美股交易日的脱敏实际动作。
-2. 核对这些动作是否符合成交前已经确认的交易计划。
+- `持仓管理`：记录仍在管理中的标的、交易工具和具体想法。
+- `计划买入`：记录计划买入或继续观察的标的、交易工具和具体想法。
 
-不做行情看板，不分析新闻和事件，也不展示账户、盈亏、价格或成交数量。
+触发、退出、加仓或减仓条件如果存在，就写进具体想法；不额外制造必填字段。未实施的想法可以继续有效，已经买入也不代表持仓管理结束。期权方向使用英文 `Call` / `Put`。
 
-## 输出长什么样
+## 日常使用
 
-```text
-复盘交易日：YYYY-MM-DD
+每天先读 `25 投资交易` 中的当前计划记录、相关旧日记和当天旧记录，再听用户本次对交易想法、等待原因或计划变化的叙述。若只有旧不可变计划版本而没有普通计划落点，先向用户确认目标和承接范围，不静默迁移。已有回答不重复问，只追必要缺口；没有当日叙述时不自行补写。暂缺券商资料时仍可如实记录用户想法，但要明确区分自述和已核验事实，不能把自述标为独立核验的成交、持仓或行情事实。
 
-- 标的 A｜买入｜正股｜按计划
-- 标的 B｜卖出｜0DTE 期权｜无法核对
-```
+先展示具体 Markdown 草稿。对未来动作保留“考虑”“可能”等原语气，不自动升级为确定执行；新建或修订仅在展示具体内容并得到用户确认写入后保存，不强制新版本或固定问卷。确认后的每日内容写入现有 `25 投资交易/10 每日复盘`，周度回顾写入 `25 投资交易/20 周度复盘`，当前计划沿用 `25 投资交易/30 已确认计划摘要` 内的现有落点；若那里尚未有已确认的普通计划落点，先向用户确认目标和承接范围，不另建源。无变化时为 `no_op`。写入前重读并发；已有 managed 日记只在既有 managed 边界内更新，没有 managed 的普通计划笔记只改用户确认的段落，保留其余手写内容，不强制新建 managed 区域或 schema。写后先文件系统回读，再顺序做 Obsidian CLI 回读。
 
-每条动作只保留：
+## 技术面与周末
 
-- 标的 underlying
-- 买入或卖出
-- 正股、单股杠杆 ETF、0DTE 期权、其他期权或无法识别
-- 按计划、偏离计划或无法核对
+只有用户讨论某标的且需要参考时，才提供轻量支撑、压力或条件判断。默认使用真实来源的已完成 1D 日线，注明来源和截至时间；不足就说不能判断。目标价不是已验证压力位，触价不是成交，日线结果不是小时验证；小时观察由用户自行查看，口述内容只作为自述。
 
-同一标的、动作和工具的拆分成交会被合并。
+周末只回顾本周已发生的操作和计划实施，区分已实施、仍等待和缺少证据。仍有效的计划跨周沿用；只有用户确认作废后，才把具体对象单独展示并归档到现有私有知识库，不直接删除或自动失效。周度说明写入 `25 投资交易/20 周度复盘`。Skill 支持生成周末回顾；本轮不配置或声称同步定时任务，调度配置需另获授权。
 
-## 安装
+## 边界与验证
+
+沿用现有隐私边界，不把账户、盈亏、原始券商响应、凭据或具体期权身份写入仓库、普通日志或公开日记；不下单、不恢复 Web UI、SQLite 或 Bridge。现有只读成交/合约辅助脚本可按需参考，但不是每日主流程；本轮不强制机器投影、不可变版本或 schema，也不迁移真实记录。
+
+开发验证：
 
 ```bash
-npx skills add archerthegoat/trading-review-longbridge \
-  --skill daily-trade-journal
-```
-
-## 使用
-
-安装后，可以在 Codex 中这样开始：
-
-```text
-使用 daily-trade-journal，复盘上一已完成美股交易日。
-先展示脱敏草稿，不要直接写入 Obsidian。
-```
-
-Skill 使用以下证据：
-
-- Longbridge 美股交易日历
-- 上一已完成交易日范围内的只读 execution history
-- 成交前已经明确确认的周计划或日内修订
-
-草稿、闲聊、待确认内容以及事后推断不能作为计划证据。
-
-## 隐私边界
-
-公开输出和持久化结果不会包含：
-
-- 数量、价格、成本、佣金或盈亏
-- 账户、订单、成交、请求或会话 ID
-- 原始券商响应
-- 具体期权合约身份
-- 凭据、Cookie 或 API Key
-
-输入结构、交易日窗口、计划确认状态或隐私边界不明确时，结果必须保持 `blocked`，不能猜测补齐。
-
-0DTE 只根据到期日是否等于复盘交易日进行机械判断，不会被推断成 Long Call。
-
-## Obsidian 写入
-
-Skill 默认只生成草稿，不自动写入 Obsidian。
-
-只有用户在当前任务中明确回复“确认写入”后，才允许更新：
-
-```text
-25 投资交易/10 每日复盘/<review_date>.md
-```
-
-写入只管理 `daily-trade-journal` 区块，保留“我的补充”和其他用户文本。写入前检查并发变化，写入后分别进行文件系统和 Obsidian CLI 回读。
-
-自动化可以定时创建独立复盘任务，但不能绕过确认门禁或自动写入日记。
-
-## 项目结构
-
-```text
-skills/daily-trade-journal/
-├── SKILL.md
-├── agents/openai.yaml
-└── scripts/project_daily_trade_journal.py
-
-tests/test_project_daily_trade_journal.py
-开发路径图.md
-```
-
-确定性的投影脚本只负责脱敏、聚合和计划对齐，不直接调用券商、数据库或 Obsidian。
-
-## 开发验证
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 \
-  -m unittest discover -s tests -v
-
-PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 \
-  "$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py" \
-  skills/daily-trade-journal
-
-npx --yes skills add . --list
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 "$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py" skills/daily-trade-journal
 git diff --check
 ```
 
-产品边界、自动化计划和尚未完成的真实运行门禁见 [开发路径图](开发路径图.md)。
+这些检查只证明本地实现约束。真实行情、真实写入、迁移、调度、自动化运行和人类验收必须分别回读和报告，不能互相升级状态。

@@ -1,4 +1,4 @@
 interface:
   display_name: "每日交易日记"
-  short_description: "按计划核对上一美股交易日的脱敏交易动作"
-  default_prompt: "Use $daily-trade-journal to draft the previous completed NY trading day's sanitized actions and plan alignment; do not write Obsidian until I say 确认写入."
+  short_description: "按用户叙述持续维护持仓管理与计划买入想法，并在确认后保存到知识库"
+  default_prompt: "Use $daily-trade-journal to read current plan records and related old diaries, update 持仓管理 or 计划买入 from my current narration while preserving 考虑 or 可能 language, optionally add completed-1D technical context, and wait for 确认写入 before saving."

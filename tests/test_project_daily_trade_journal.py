@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -42,6 +43,10 @@ def execution(symbol: str, *, side: str = "buy", instrument: dict[str, str] | No
     return row
 
 
+def option_execution(symbol: str, *, side: str = "buy") -> dict[str, object]:
+    return execution(symbol, side=side)
+
+
 def plan(*, underlying: str = "SYNTH.US", action: str = "buy", tool: str = "stock", **extra: object) -> dict[str, object]:
     result: dict[str, object] = {
         "underlying": underlying,
@@ -54,6 +59,60 @@ def plan(*, underlying: str = "SYNTH.US", action: str = "buy", tool: str = "stoc
 
 
 class DailyTradeJournalProjectorTests(unittest.TestCase):
+    def run_cli(
+        self,
+        root: Path,
+        raw: list[dict[str, object]],
+        output: Path,
+        *,
+        private_preview: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        raw_path = root / "raw.json"
+        calendar_path = root / "calendar.json"
+        raw_path.write_text(json.dumps(raw), encoding="utf-8")
+        os.chmod(raw_path, 0o600)
+        calendar_path.write_text(json.dumps(CALENDAR), encoding="utf-8")
+        os.chmod(calendar_path, 0o600)
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--review-date",
+            REVIEW_DATE,
+            "--raw-executions",
+            str(raw_path),
+            "--trading-calendar",
+            str(calendar_path),
+            "--output",
+            str(output),
+        ]
+        if private_preview is not None:
+            command.extend(["--private-preview", str(private_preview)])
+        return subprocess.run(command, capture_output=True, text=True, check=False)
+
+    def version(
+        self,
+        *,
+        version: str,
+        confirmed_at: str,
+        plans: list[dict[str, object]],
+        context_available: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": PROJECT.CONFIRMED_PLAN_SCHEMA_VERSION,
+            "version": version,
+            "review_date": REVIEW_DATE,
+            "status": "confirmed",
+            "confirmation_status": "confirmed",
+            "confirmed_at": confirmed_at,
+            "effective_at": confirmed_at,
+            "source_schema": "synthetic-plan.v1",
+            "source_content_hash": "a" * 64,
+            "approved_draft_schema_version": "synthetic-draft.v1",
+            "approved_draft_hash": "b" * 64,
+            "plans": plans,
+            "context_available": context_available,
+        }
+
     def test_complete_merges_split_fills_and_matches_same_row(self) -> None:
         raw = [
             execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"}),
@@ -63,8 +122,230 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(
             result["executions"],
-            [{"underlying": "SYNTH.US", "action": "买入", "tool": "正股", "alignment": "按计划"}],
+            [{"underlying": "SYNTH.US", "action": "买入", "alignment": "按计划"}],
         )
+
+    def test_private_preview_separates_contracts_merges_fills_and_sides(self) -> None:
+        rows = [
+            option_execution("SYNTH260930C190000.US"),
+            option_execution("SYNTH260930C190000.US"),
+            option_execution("SYNTH260930C190000.US", side="sell"),
+            option_execution("SYNTH261001C190000.US"),
+            option_execution("SYNTH260930P190000.US"),
+            option_execution("SYNTH260930C191000.US"),
+        ]
+        projected, facts = PROJECT._project_facts(REVIEW_DATE, rows, trading_calendar=CALENDAR)
+        text = PROJECT._private_preview_text(PROJECT.parse_date(REVIEW_DATE), facts)
+        PROJECT._assert_private_preview_text(text, PROJECT.parse_date(REVIEW_DATE))
+        self.assertEqual(projected["status"], "complete")
+        data_rows = [line for line in text.splitlines()[5:] if "｜" in line]
+        self.assertEqual(len(data_rows), 5)
+        self.assertEqual(sum("SYNTH.US｜买入｜2026-09-30｜`Call`｜$190.00" in line for line in data_rows), 1)
+        self.assertEqual(sum("SYNTH.US｜卖出｜2026-09-30｜`Call`｜$190.00" in line for line in data_rows), 1)
+        self.assertEqual(sum("｜`Put`｜" in line for line in data_rows), 1)
+        self.assertEqual(sum("｜Call｜" in line for line in data_rows), 0)
+        self.assertEqual(sum("｜Put｜" in line for line in data_rows), 0)
+        self.assertIn("标的｜动作｜到期日｜Call / Put｜行权价｜工具｜对齐结果", text)
+        self.assertNotIn("认购", text)
+        self.assertNotIn("认沽", text)
+        self.assertEqual(sum("$191.00" in line for line in data_rows), 1)
+        self.assertNotIn("SYNTH260930C190000.US", text)
+
+    def test_private_preview_uses_decimal_strike_and_zero_dte_classification(self) -> None:
+        zero_day = PROJECT.project_execution(
+            option_execution("SYNTH260831C00010000"), REVIEW_DATE
+        )
+        fractional = PROJECT.project_execution(
+            option_execution("SYNTH260930P00001125.US"), REVIEW_DATE
+        )
+        self.assertEqual(zero_day.option.strike, Decimal("10"))
+        self.assertEqual(zero_day.tool, "0DTE 期权")
+        self.assertEqual(fractional.option.strike, Decimal("1.125"))
+        self.assertEqual(fractional.tool, "其他期权")
+        text = PROJECT._private_preview_text(
+            PROJECT.parse_date(REVIEW_DATE),
+            [(zero_day, "无法核对"), (fractional, "无法核对")],
+        )
+        self.assertIn("｜0DTE 期权｜无法核对", text)
+        self.assertIn("｜`Call`｜", text)
+        self.assertIn("｜`Put`｜", text)
+        self.assertIn("$10.00", text)
+        self.assertIn("$1.125", text)
+        self.assertNotIn("Long Call", text)
+        self.assertNotIn("SYNTH260831C00010000", text)
+
+    def test_private_preview_validator_requires_english_inline_right_labels(self) -> None:
+        fact = PROJECT.project_execution(option_execution("SYNTH260930C190000.US"), REVIEW_DATE)
+        text = PROJECT._private_preview_text(PROJECT.parse_date(REVIEW_DATE), [(fact, "无法核对")])
+        self.assertRaises(
+            PROJECT.ProjectionError,
+            PROJECT._assert_private_preview_text,
+            text.replace("`Call`", "Call"),
+            PROJECT.parse_date(REVIEW_DATE),
+        )
+        self.assertRaises(
+            PROJECT.ProjectionError,
+            PROJECT._assert_private_preview_text,
+            text.replace("Call / Put", "认购/认沽"),
+            PROJECT.parse_date(REVIEW_DATE),
+        )
+
+    def test_private_preview_is_opt_in_and_cli_writes_owner_only_markdown(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="daily-trade-journal-private-",
+            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
+        ) as directory:
+            root = Path(directory).resolve()
+            os.chmod(root, 0o700)
+            output = root / "facts.json"
+            without_preview = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                output,
+            )
+            self.assertEqual(without_preview.returncode, 0)
+            self.assertFalse((root / "preview.md").exists())
+            public_before = output.read_text(encoding="utf-8")
+            self.assertNotIn("260831C00010000", public_before)
+            private = root / "preview.md"
+            with_preview = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                output,
+                private_preview=private,
+            )
+            self.assertEqual(with_preview.returncode, 0)
+            self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
+            private_text = private.read_text(encoding="utf-8")
+            self.assertIn("# 期权核对 · 2026-08-31（美东）", private_text)
+            self.assertEqual(public_before, output.read_text(encoding="utf-8"))
+            self.assertNotIn("260831C00010000", private_text)
+
+    def test_malformed_option_components_fail_without_private_preview_or_raw_symbol(self) -> None:
+        malformed = (
+            "SYNTH260231C190000.US",
+            "SYNTH260831X190000.US",
+            "SYNTH260831C19.000.US",
+        )
+        for symbol in malformed:
+            with self.subTest(symbol=symbol), tempfile.TemporaryDirectory(
+                prefix="daily-trade-journal-malformed-",
+                dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
+            ) as directory:
+                root = Path(directory).resolve()
+                os.chmod(root, 0o700)
+                output = root / "facts.json"
+                private = root / "preview.md"
+                completed = self.run_cli(root, [option_execution(symbol)], output, private_preview=private)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertFalse(private.exists())
+                blocked = output.read_text(encoding="utf-8")
+                self.assertIn('"status": "blocked"', blocked)
+                self.assertNotIn(symbol, blocked)
+
+    def test_private_preview_path_rejects_relative_symlink_unsafe_and_colliding_targets(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="daily-trade-journal-private-path-",
+            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
+        ) as directory:
+            root = Path(directory).resolve()
+            os.chmod(root, 0o700)
+            output = root / "facts.json"
+            raw = [option_execution("SYNTH260831C00010000")]
+            relative = self.run_cli(root, raw, output, private_preview=Path("preview.md"))
+            self.assertNotEqual(relative.returncode, 0)
+            self.assertFalse((root / "preview.md").exists())
+
+            secure = root / "secure"
+            secure.mkdir()
+            os.chmod(secure, 0o700)
+            alias = root / "alias"
+            os.symlink(secure, alias)
+            symlinked = self.run_cli(root, raw, output, private_preview=alias / "preview.md")
+            self.assertNotEqual(symlinked.returncode, 0)
+            self.assertFalse((secure / "preview.md").exists())
+
+            unsafe = root / "unsafe"
+            unsafe.mkdir()
+            os.chmod(unsafe, 0o755)
+            unsafe_result = self.run_cli(root, raw, output, private_preview=unsafe / "preview.md")
+            self.assertNotEqual(unsafe_result.returncode, 0)
+            self.assertFalse((unsafe / "preview.md").exists())
+
+            collision = self.run_cli(root, raw, output, private_preview=output)
+            self.assertNotEqual(collision.returncode, 0)
+            self.assertFalse(output.exists())
+
+    def test_private_preview_existing_unsafe_file_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="daily-trade-journal-private-existing-",
+            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
+        ) as directory:
+            root = Path(directory).resolve()
+            os.chmod(root, 0o700)
+            private = root / "preview.md"
+            private.write_text("sentinel", encoding="utf-8")
+            os.chmod(private, 0o644)
+            completed = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                root / "facts.json",
+                private_preview=private,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertEqual(private.read_text(encoding="utf-8"), "sentinel")
+            self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o644)
+
+    def test_preflight_collisions_and_invalid_private_path_never_overwrite_targets(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="daily-trade-journal-preflight-",
+            dir=str(PROJECT.PRIVATE_PREVIEW_ROOT),
+        ) as directory:
+            root = Path(directory).resolve()
+            os.chmod(root, 0o700)
+
+            raw_output = root / "raw.json"
+            raw_collision = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                raw_output,
+            )
+            self.assertNotEqual(raw_collision.returncode, 0)
+            self.assertNotIn('"status": "blocked"', raw_output.read_text(encoding="utf-8"))
+            self.assertIn("SYNTH260831C00010000", raw_output.read_text(encoding="utf-8"))
+
+            calendar_output = root / "calendar.json"
+            calendar_collision = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                calendar_output,
+            )
+            self.assertNotEqual(calendar_collision.returncode, 0)
+            calendar_text = calendar_output.read_text(encoding="utf-8")
+            self.assertNotIn('"status": "blocked"', calendar_text)
+            self.assertIn(REVIEW_DATE, calendar_text)
+
+            existing_output = root / "existing.json"
+            existing_output.write_text("existing-output", encoding="utf-8")
+            os.chmod(existing_output, 0o600)
+            invalid_private = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                existing_output,
+                private_preview=Path("relative-preview.md"),
+            )
+            self.assertNotEqual(invalid_private.returncode, 0)
+            self.assertEqual(existing_output.read_text(encoding="utf-8"), "existing-output")
+
+            private_collision_output = root / "facts.md"
+            private_collision = self.run_cli(
+                root,
+                [option_execution("SYNTH260831C00010000")],
+                private_collision_output,
+                private_preview=private_collision_output,
+            )
+            self.assertNotEqual(private_collision.returncode, 0)
+            self.assertFalse(private_collision_output.exists())
 
     def test_buy_and_sell_are_separate_rows(self) -> None:
         result = PROJECT.project_facts(
@@ -102,8 +383,14 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
             ],
             trading_calendar=CALENDAR,
         )
-        self.assertEqual({row["tool"] for row in result["executions"]}, {"其他期权", "无法识别"})
+        self.assertEqual(
+            [row.get("tool") for row in result["executions"] if "tool" in row],
+            ["其他期权"],
+        )
         self.assertTrue(all(row["alignment"] == "无法核对" for row in result["executions"]))
+        self.assertTrue(
+            any(set(row) == {"underlying", "action", "alignment"} for row in result["executions"])
+        )
 
     def test_explicit_different_or_prohibited_plan_is_mismatch(self) -> None:
         result = PROJECT.project_facts(
@@ -160,6 +447,150 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
             PROJECT.project_facts(REVIEW_DATE, [])
         with self.assertRaises(PROJECT.ProjectionError):
             PROJECT.project_facts(REVIEW_DATE, [execution("SYNTH.US")])
+
+    def test_native_longbridge_calendar_shape_is_accepted(self) -> None:
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [],
+            trading_calendar={"trading_days": ["2026-08-30", REVIEW_DATE], "half_trading_days": []},
+        )
+        self.assertEqual(result["status"], "empty")
+
+    def test_native_calendar_open_entry_requires_completed_true(self) -> None:
+        with self.assertRaises(PROJECT.ProjectionError):
+            PROJECT.project_facts(
+                REVIEW_DATE,
+                [],
+                trading_calendar={"trading_days": [{"date": REVIEW_DATE, "status": "open"}]},
+            )
+
+    def test_confirmed_version_row_inherits_envelope_confirmation(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[{"underlying": "SYNTH.US", "action": "buy", "tool": "stock"}],
+        )
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"})],
+            trading_calendar=CALENDAR,
+            plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}],
+        )
+        self.assertEqual(result["executions"][0]["alignment"], "按计划")
+
+    def test_confirmed_context_without_exact_plan_emits_only_context_note(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[],
+            context_available=True,
+        )
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"})],
+            trading_calendar=CALENDAR,
+            plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}],
+        )
+        self.assertEqual(result["context_note"], PROJECT.CONTEXT_NOTE)
+        self.assertEqual(
+            set(result),
+            {"schema_version", "review_date", "status", "executions", "context_note"},
+        )
+        self.assertEqual(set(result["executions"][0]), {"underlying", "action", "alignment"})
+        self.assertNotIn("context_available", json.dumps(result, ensure_ascii=False))
+
+    def test_context_note_is_not_emitted_when_exact_plan_rows_exist(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[{"underlying": "SYNTH.US", "action": "buy", "tool": "stock"}],
+            context_available=True,
+        )
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"})],
+            trading_calendar=CALENDAR,
+            plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}],
+        )
+        self.assertNotIn("context_note", result)
+        self.assertEqual(result["executions"][0]["alignment"], "按计划")
+
+    def test_context_signal_must_be_boolean(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[],
+            context_available=True,
+        )
+        version["context_available"] = "yes"
+        with self.assertRaises(PROJECT.ProjectionError):
+            PROJECT.project_facts(
+                REVIEW_DATE,
+                [],
+                trading_calendar=CALENDAR,
+                plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}],
+            )
+
+    def test_ordinary_tools_are_hidden_but_alignment_is_conservative_when_collapsed(self) -> None:
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [
+                execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"}),
+                execution("SYNTH.US", instrument={"tool_kind": "single_stock_leveraged_etf", "underlying": "SYNTH.US"}),
+            ],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="stock")],
+        )
+        self.assertEqual(
+            result["executions"],
+            [{"underlying": "SYNTH.US", "action": "买入", "alignment": "无法核对"}],
+        )
+
+    def test_latest_confirmed_version_is_global_and_temporal(self) -> None:
+        older = self.version(
+            version="2026-08-30-090000",
+            confirmed_at="2026-08-30T09:00:00-04:00",
+            plans=[{"underlying": "SYNTH.US", "action": "buy", "tool": "stock", "status": "confirmed"}],
+        )
+        newer_without_underlying = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[{"underlying": "OTHER.US", "action": "buy", "tool": "stock", "status": "confirmed"}],
+        )
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"})],
+            trading_calendar=CALENDAR,
+            plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [older, newer_without_underlying]}],
+        )
+        self.assertEqual(result["executions"][0]["alignment"], "无法核对")
+
+        after_execution = self.version(
+            version="2026-08-31-160000",
+            confirmed_at="2026-08-31T16:00:00-04:00",
+            plans=[{"underlying": "SYNTH.US", "action": "buy", "tool": "stock", "status": "confirmed"}],
+        )
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US", instrument={"tool_kind": "stock", "underlying": "SYNTH.US"})],
+            trading_calendar=CALENDAR,
+            plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [older, after_execution]}],
+        )
+        self.assertEqual(result["executions"][0]["alignment"], "按计划")
+
+    def test_confirmed_plan_version_duplicates_fail_closed(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[],
+        )
+        with self.assertRaises(PROJECT.ProjectionError):
+            PROJECT.project_facts(
+                REVIEW_DATE,
+                [],
+                trading_calendar=CALENDAR,
+                plans=[{"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version, version]}],
+            )
 
     def test_open_calendar_entry_requires_completed_true(self) -> None:
         open_calendar = {"sessions": [{"date": REVIEW_DATE, "status": "open"}]}
