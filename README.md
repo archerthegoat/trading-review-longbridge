@@ -18,7 +18,9 @@
 
 ## Al Brooks PA 边界
 
-PA Skill 面向用户已筛选的单一标的或交易 Set，不选股、不做基本面研究、不下单、不管理账户、不自动写 Obsidian，也不调用其他研究 Skill。它可以在证据足够时描述趋势、交易区间、通道、突破/失败、信号 K、跟随、回踩、微型双底/双顶和 measured move；每项均区分用户自述、数据事实和分析推断，并注明周期、来源、截至时间及 K 线是否完成。它不强行给概率、结果评价或未证实目标。
+PA Skill 面向用户已筛选的单一标的或交易 Set，不选股、不做基本面研究、不下单、不管理账户、不自动写 Obsidian，也不调用其他研究 Skill。它可以在证据足够时描述趋势、交易区间、通道、突破/失败、信号 K、跟随、回踩、微型双底/双顶和 measured move；每项均区分用户自述、数据事实和分析推断，并注明周期、来源、截至时间及 K 线是否完成。事件、触发、观察窗口、支持证据和反证都明确时，可给约 40–50%、50–60% 或 60–70% 的宽区间主观估计；这不是 Brooks 固定分档或回测胜率，缺口时暂不量化，且标的方向不等于 Long Call/Long Put 盈利概率。
+
+PA 参考按需分层：分析流程与证据门禁见 [pa-framework.md](skills/al-brooks-pa/references/pa-framework.md)，五类 setup 见 [setup-catalog.md](skills/al-brooks-pa/references/setup-catalog.md)，稳定的脱敏表达偏好见 [personal-trading-profile.md](skills/al-brooks-pa/references/personal-trading-profile.md)。输出仍收敛为简短结构判断、1–3 个条件情景和盘中关注要点。
 
 ## 日内交易 Set
 

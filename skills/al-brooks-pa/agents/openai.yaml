@@ -1,4 +1,7 @@
 interface:
   display_name: "Al Brooks PA 分析"
-  short_description: "针对已筛选标的输出条件化 PA 分析与盘中关注点清单"
-  default_prompt: "使用 $al-brooks-pa 基于我提供的日线背景和 1H 数据，区分事实与推断，输出条件化 PA 分析与盘中关注要点。"
+  short_description: "针对已筛选标的输出条件化 PA 分析与盘中关注清单"
+  default_prompt: "使用 $al-brooks-pa，先读取 references/pa-framework.md 与 references/personal-trading-profile.md；识别具体 setup 或 QQQ 日内 Set 时再读取 references/setup-catalog.md，按数据门禁输出市场状态、位置、signal/follow-through、条件分支、失效条件、必要时的宽区间主观概率与盘中关注要点。"
+
+policy:
+  allow_implicit_invocation: true
