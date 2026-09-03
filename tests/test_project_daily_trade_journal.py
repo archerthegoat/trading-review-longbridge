@@ -399,6 +399,72 @@ raise SystemExit(project.main(arguments))
         self.assertNotIn("Long Call", json.dumps(result, ensure_ascii=False))
         self.assertNotIn("260831C00010000", json.dumps(result, ensure_ascii=False))
 
+    def test_confirmed_call_and_put_plans_align_by_internal_option_right(self) -> None:
+        call_execution = [execution("SYNTH.US260930C00010000")]
+        call_result = PROJECT.project_facts(
+            REVIEW_DATE,
+            call_execution,
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="Long Call")],
+        )
+        self.assertEqual(call_result["executions"][0]["alignment"], "按计划")
+        call_fact = PROJECT.parse_plans([plan(tool="Call")]).plans[0]
+        self.assertEqual(call_fact.tool, "其他期权")
+        self.assertEqual(call_fact.option_right, "Call")
+
+        put_result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US260930P00010000")],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="Call")],
+        )
+        self.assertEqual(put_result["executions"][0]["alignment"], "偏离计划")
+
+        put_plan_result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US260930P00010000")],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="Long Put")],
+        )
+        self.assertEqual(put_plan_result["executions"][0]["alignment"], "按计划")
+        reverse_result = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US260930C00010000")],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="Put")],
+        )
+        self.assertEqual(reverse_result["executions"][0]["alignment"], "偏离计划")
+
+    def test_intraday_revision_call_plan_is_used_without_public_right_or_identity(self) -> None:
+        result = PROJECT.project_facts(
+            REVIEW_DATE,
+            {
+                "executions": [execution("SYNTH.US260831C00010000")],
+                "intraday_revisions": [plan(tool="Call")],
+            },
+            trading_calendar=CALENDAR,
+        )
+        self.assertEqual(result["executions"][0]["alignment"], "按计划")
+        encoded = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("Call", encoded)
+        self.assertNotIn("260831C00010000", encoded)
+
+    def test_generic_other_option_keeps_category_only_matching(self) -> None:
+        other_option = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US260930C00010000")],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="other_option")],
+        )
+        self.assertEqual(other_option["executions"][0]["alignment"], "按计划")
+        zero_dte = PROJECT.project_facts(
+            REVIEW_DATE,
+            [execution("SYNTH.US260831C00010000")],
+            trading_calendar=CALENDAR,
+            plans=[plan(tool="other_option")],
+        )
+        self.assertEqual(zero_dte["executions"][0]["alignment"], "偏离计划")
+
     def test_other_option_and_unknown_tool_are_safe(self) -> None:
         result = PROJECT.project_facts(
             REVIEW_DATE,
@@ -460,6 +526,15 @@ raise SystemExit(project.main(arguments))
             plans=[explicitly_confirmed],
         )
         self.assertEqual(result["executions"][0]["alignment"], "按计划")
+
+    def test_invalid_plan_time_fails_closed_without_alignment(self) -> None:
+        with self.assertRaises(PROJECT.ProjectionError):
+            PROJECT.project_facts(
+                REVIEW_DATE,
+                [execution("SYNTH.US260930C00010000")],
+                trading_calendar=CALENDAR,
+                plans=[plan(tool="Call", confirmed_at="not-a-timestamp")],
+            )
 
     def test_empty_is_distinct_from_blocked(self) -> None:
         empty = PROJECT.project_facts(REVIEW_DATE, [], trading_calendar=CALENDAR)

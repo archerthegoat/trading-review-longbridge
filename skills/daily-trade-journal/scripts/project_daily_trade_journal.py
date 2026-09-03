@@ -36,6 +36,19 @@ OPTION_TOOLS = frozenset({"0DTE 期权", "其他期权"})
 # interpreted as opening/closing or directional strategy semantics.
 OPTION_RIGHT_LABELS = {"C": "Call", "P": "Put"}
 PRIVATE_OPTION_RIGHT_DISPLAY = {key: f"`{label}`" for key, label in OPTION_RIGHT_LABELS.items()}
+# Plan tools may name a directional option without exposing contract identity.
+# Keep this dimension internal to alignment; public execution rows retain only
+# their existing option category (0DTE/other option).
+PLAN_OPTION_RIGHT_ALIASES = {
+    "call": "Call",
+    "long call": "Call",
+    "long_call": "Call",
+    "long-call": "Call",
+    "put": "Put",
+    "long put": "Put",
+    "long_put": "Put",
+    "long-put": "Put",
+}
 PRIVATE_OPTION_COLUMNS = "标的｜动作｜到期日｜Call / Put｜行权价｜工具｜对齐结果"
 CONTEXT_NOTE = "已找到事前确认的计划背景，但其中缺少可机械核对的明确动作或触发证据，因此相关交易保持“无法核对”。"
 NY_TZ = ZoneInfo("America/New_York")
@@ -182,9 +195,16 @@ TOOL_ALIASES = {
     "other_option": "其他期权",
     "option": "其他期权",
     "other option": "其他期权",
+    "call": "其他期权",
+    "long call": "其他期权",
+    "long-call": "其他期权",
     "leap_call": "其他期权",
     "long_call": "其他期权",
     "Long Call": "其他期权",
+    "put": "其他期权",
+    "long put": "其他期权",
+    "long-put": "其他期权",
+    "long_put": "其他期权",
     "其他期权": "其他期权",
     "unknown": "无法识别",
     "无法识别": "无法识别",
@@ -242,6 +262,7 @@ class PlanFact(NamedTuple):
     underlying: str
     actions: tuple[str, ...]
     tool: str | None
+    option_right: str | None
     prohibited: bool
     confirmed: bool
     effective_at: dt.datetime | None
@@ -725,17 +746,29 @@ def _plan_actions(row: Mapping[str, Any], prohibited: bool) -> tuple[str, ...]:
     raise ProjectionError("plan action is missing")
 
 
-def _plan_tool(row: Mapping[str, Any], prohibited: bool) -> str | None:
-    candidates = []
+def _normalize_plan_tool(value: Any) -> tuple[str, str | None]:
+    if not isinstance(value, str):
+        raise ProjectionError("plan tool is invalid")
+    cleaned = value.strip()
+    option_right = PLAN_OPTION_RIGHT_ALIASES.get(cleaned.lower())
+    if option_right is not None:
+        # Preserve the existing category for public/private projection while
+        # retaining the explicitly named Call/Put as an internal dimension.
+        return "其他期权", option_right
+    return normalize_tool(cleaned), None
+
+
+def _plan_tool(row: Mapping[str, Any], prohibited: bool) -> tuple[str | None, str | None]:
+    candidates: list[tuple[str, str | None]] = []
     for key in ("tool", "tool_kind"):
         if key in row:
-            candidates.append(normalize_tool(row[key]))
+            candidates.append(_normalize_plan_tool(row[key]))
     if len(set(candidates)) > 1:
         raise ProjectionError("plan tools conflict")
     if candidates:
         return candidates[0]
     if prohibited:
-        return None
+        return None, None
     raise ProjectionError("plan tool is missing")
 
 
@@ -775,7 +808,7 @@ def parse_plan_row(
     }:
         prohibited = True
     actions = _plan_actions(row, prohibited)
-    tool = _plan_tool(row, prohibited)
+    tool, option_right = _plan_tool(row, prohibited)
     status = _status_value(row)
     if status not in {None, *CONFIRMED_STATUSES, *NONCONFIRMED_STATUSES}:
         raise ProjectionError("plan status is unsupported")
@@ -806,6 +839,7 @@ def parse_plan_row(
         underlying=underlying,
         actions=actions,
         tool=tool,
+        option_right=option_right,
         prohibited=prohibited,
         confirmed=confirmed,
         effective_at=effective_at,
@@ -963,6 +997,25 @@ def _version_priority(version: PlanVersionFact) -> tuple[dt.datetime, dt.datetim
     return (version.confirmed_at, version.effective_at, version.order)
 
 
+def _plan_matches_execution(execution: ExecutionFact, plan: PlanFact) -> bool:
+    if execution.action not in plan.actions:
+        return False
+    if plan.option_right is not None:
+        # A directional Call/Put plan intentionally matches either option
+        # expiry class, but only when the parsed provider right agrees.  This
+        # keeps 0DTE mechanical while allowing the plan's explicit direction
+        # to be the alignment dimension.
+        execution_right = (
+            OPTION_RIGHT_LABELS.get(execution.option.right)
+            if execution.option is not None
+            else None
+        )
+        return execution.tool in OPTION_TOOLS and execution_right == plan.option_right
+    # Generic option plans retain the old conservative category match: they
+    # do not infer Call/Put and do not equate 0DTE with other options.
+    return execution.tool == plan.tool
+
+
 def _alignment_for_rows(execution: ExecutionFact, plans: Sequence[PlanFact]) -> str:
     if execution.tool == "无法识别":
         return "无法核对"
@@ -978,7 +1031,7 @@ def _alignment_for_rows(execution: ExecutionFact, plans: Sequence[PlanFact]) -> 
     latest = [plan for plan in prior if _plan_priority(plan)[:2] == latest_priority]
     if len(latest) > 1:
         outcomes = {
-            "prohibited" if plan.prohibited else "match" if execution.action in plan.actions and plan.tool == execution.tool else "different"
+            "prohibited" if plan.prohibited else "match" if _plan_matches_execution(execution, plan) else "different"
             for plan in latest
         }
         if len(outcomes) > 1:
@@ -986,7 +1039,7 @@ def _alignment_for_rows(execution: ExecutionFact, plans: Sequence[PlanFact]) -> 
     plan = max(latest, key=lambda item: item.order)
     if plan.prohibited:
         return "偏离计划"
-    if execution.action in plan.actions and plan.tool == execution.tool:
+    if _plan_matches_execution(execution, plan):
         return "按计划"
     return "偏离计划"
 
