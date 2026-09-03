@@ -23,6 +23,12 @@ research/
 mars-research/
 skills-lock.json
 
+# Root temporary exports
+/tmp_*
+/temp_*
+/tmp/
+/temp/
+
 # Operating-system/editor files
 .DS_Store
 .idea/
