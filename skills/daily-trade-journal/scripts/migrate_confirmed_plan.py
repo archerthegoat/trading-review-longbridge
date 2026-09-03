@@ -658,6 +658,19 @@ def _extract_markdown(text: str) -> dict[str, Any]:
 def extract(plans_dir: str, output_path: str) -> dict[str, Any]:
     directory = _owner_path(plans_dir, directory=True)
     paths = sorted(directory.glob("*.md"), key=lambda item: item.name)
+    output = Path(output_path).expanduser()
+    if not output.is_absolute():
+        output = Path.cwd() / output
+    try:
+        output = Path(os.path.abspath(output)).resolve(strict=False)
+        for path in paths:
+            if path.is_symlink():
+                raise PlanError("symbolic links are not accepted")
+        input_paths = {path.resolve(strict=True) for path in paths}
+    except (OSError, RuntimeError) as exc:
+        raise PlanError("output path cannot be normalized") from exc
+    if output.suffix.lower() == ".md" or output in input_paths:
+        raise PlanError("extract output conflicts with immutable plan version")
     versions: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path in paths:
@@ -678,11 +691,14 @@ def _blocked(output_path: str | None) -> None:
     if not output_path:
         return
     try:
+        # Failed runs must not overwrite an existing artifact; the non-zero
+        # exit status remains the failure signal when no envelope can be written.
         _atomic_write(
             output_path,
             (json.dumps({"schema_version": PLAN_INPUT_SCHEMA, "status": "blocked", "versions": []}, ensure_ascii=False) + "\n").encode(
                 "utf-8"
             ),
+            replace=False,
         )
     except Exception:
         pass

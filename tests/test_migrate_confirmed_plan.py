@@ -23,6 +23,7 @@ SPEC.loader.exec_module(MIGRATE)
 
 
 CONFIRMED_AT = "2026-09-01T19:50:05+08:00"
+PRIVATE_MARKER = "SYNTH-PRIVATE-CONTENT-DO-NOT-PRINT"
 
 
 def authority(*, explicit_plan: bool = False) -> dict[str, object]:
@@ -87,7 +88,38 @@ def write_private(path: Path, value: object) -> None:
     os.chmod(path, 0o600)
 
 
+def authority_with_private_marker(*, explicit_plan: bool = False) -> dict[str, object]:
+    value = authority(explicit_plan=explicit_plan)
+    interview = value["approved_interview"]
+    if not isinstance(interview, dict) or not isinstance(interview["candidates"], list):
+        raise AssertionError("synthetic authority fixture is malformed")
+    if not isinstance(interview["candidates"][0], dict):
+        raise AssertionError("synthetic authority candidate is malformed")
+    interview["candidates"][0]["note"] = PRIVATE_MARKER
+    value["approved_draft_hash"] = hashlib.sha256(
+        json.dumps(interview, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return value
+
+
+def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *arguments],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 class ConfirmedPlanMigrationTests(unittest.TestCase):
+    def assert_cli_does_not_leak_private_content(self, completed: subprocess.CompletedProcess[str]) -> None:
+        self.assertNotIn(PRIVATE_MARKER, completed.stdout)
+        self.assertNotIn(PRIVATE_MARKER, completed.stderr)
+
     def test_migrate_validates_hash_preserves_snapshot_and_is_immutable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="daily-plan-migration-") as directory:
             root = Path(directory)
@@ -203,21 +235,255 @@ class ConfirmedPlanMigrationTests(unittest.TestCase):
             source = root / "authority.json"
             output = root / "plans.json"
             write_private(source, {"not": "an authority"})
-            command = [
-                sys.executable,
-                str(SCRIPT),
+            completed = run_cli(
                 "--mode",
                 "migrate",
                 "--source-authority",
                 str(source),
                 "--output",
                 str(output),
-            ]
-            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+            )
             self.assertEqual(completed.returncode, 2)
             self.assertEqual(completed.stdout, "")
             self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["status"], "blocked")
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+    def test_cli_repeated_migrate_preserves_existing_version(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="daily-plan-cli-repeat-") as directory:
+            root = Path(directory)
+            source = root / "authority.json"
+            output = root / "2026-09-01-195005.md"
+            write_private(source, authority_with_private_marker())
+
+            first = run_cli(
+                "--mode",
+                "migrate",
+                "--source-authority",
+                str(source),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assert_cli_does_not_leak_private_content(first)
+            before = hashlib.sha256(output.read_bytes()).digest()
+
+            second = run_cli(
+                "--mode",
+                "migrate",
+                "--source-authority",
+                str(source),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(second.returncode, 2)
+            self.assertEqual(second.stdout, "")
+            self.assertEqual(second.stderr, "")
+            self.assert_cli_does_not_leak_private_content(second)
+            self.assertEqual(hashlib.sha256(output.read_bytes()).digest(), before)
+
+    def test_cli_migrate_same_source_output_preserves_valid_and_invalid_source(self) -> None:
+        cases = (authority_with_private_marker(), {"not": "an authority", "secret": PRIVATE_MARKER})
+        for value in cases:
+            with self.subTest(valid=value is cases[0]), tempfile.TemporaryDirectory(prefix="daily-plan-cli-same-") as directory:
+                source = Path(directory) / "authority.json"
+                write_private(source, value)
+                before = source.read_bytes()
+
+                completed = run_cli(
+                    "--mode",
+                    "migrate",
+                    "--source-authority",
+                    str(source),
+                    "--output",
+                    str(source),
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr, "")
+                self.assert_cli_does_not_leak_private_content(completed)
+                self.assertEqual(source.read_bytes(), before)
+
+    def test_cli_extract_output_same_as_valid_or_corrupt_input_preserves_input(self) -> None:
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory(prefix="daily-plan-cli-extract-conflict-") as directory:
+                root = Path(directory)
+                source = root / "authority.json"
+                versions = root / "versions"
+                versions.mkdir()
+                input_path = versions / "2026-09-01-195005.md"
+                write_private(source, authority_with_private_marker(explicit_plan=True))
+                migrated = run_cli(
+                    "--mode",
+                    "migrate",
+                    "--source-authority",
+                    str(source),
+                    "--output",
+                    str(input_path),
+                )
+                self.assertEqual(migrated.returncode, 0, migrated.stderr)
+                if corrupt:
+                    input_path.write_bytes(("corrupt " + PRIVATE_MARKER).encode("utf-8"))
+                    os.chmod(input_path, 0o600)
+                before = input_path.read_bytes()
+
+                completed = run_cli(
+                    "--mode",
+                    "extract",
+                    "--plans-dir",
+                    str(versions),
+                    "--output",
+                    str(input_path),
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertEqual(completed.stdout, "")
+                self.assertEqual(completed.stderr, "")
+                self.assert_cli_does_not_leak_private_content(completed)
+                self.assertEqual(input_path.read_bytes(), before)
+
+    def test_cli_extract_alias_conflict_preserves_input(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="daily-plan-cli-extract-alias-") as directory:
+            root = Path(directory)
+            source = root / "authority.json"
+            versions = root / "versions"
+            alias_dir = versions / "alias"
+            versions.mkdir()
+            alias_dir.mkdir()
+            input_path = versions / "2026-09-01-195005.md"
+            alias_path = Path(str(alias_dir) + "/../" + input_path.name)
+            write_private(source, authority_with_private_marker())
+            migrated = run_cli(
+                "--mode",
+                "migrate",
+                "--source-authority",
+                str(source),
+                "--output",
+                str(input_path),
+            )
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            before = input_path.read_bytes()
+
+            completed = run_cli(
+                "--mode",
+                "extract",
+                "--plans-dir",
+                str(versions),
+                "--output",
+                str(alias_path),
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertEqual(completed.stdout, "")
+            self.assertEqual(completed.stderr, "")
+            self.assert_cli_does_not_leak_private_content(completed)
+            self.assertEqual(input_path.read_bytes(), before)
+
+    def test_cli_extract_rejects_existing_markdown_output_outside_input_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="daily-plan-cli-extract-markdown-") as directory:
+            root = Path(directory)
+            source = root / "authority.json"
+            versions = root / "versions"
+            outside = root / "outside"
+            versions.mkdir()
+            outside.mkdir()
+            input_path = versions / "2026-09-01-195005.md"
+            output = outside / "existing.md"
+            write_private(source, authority_with_private_marker())
+            migrated = run_cli(
+                "--mode",
+                "migrate",
+                "--source-authority",
+                str(source),
+                "--output",
+                str(input_path),
+            )
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            output.write_bytes(input_path.read_bytes())
+            os.chmod(output, 0o600)
+            before = hashlib.sha256(output.read_bytes()).digest()
+
+            completed = run_cli(
+                "--mode",
+                "extract",
+                "--plans-dir",
+                str(versions),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertEqual(completed.stdout, "")
+            self.assertEqual(completed.stderr, "")
+            self.assert_cli_does_not_leak_private_content(completed)
+            self.assertEqual(hashlib.sha256(output.read_bytes()).digest(), before)
+
+    def test_cli_migrate_then_extract_with_independent_output_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="daily-plan-cli-normal-") as directory:
+            root = Path(directory)
+            source = root / "authority.json"
+            versions = root / "versions"
+            versions.mkdir()
+            input_path = versions / "2026-09-01-195005.md"
+            output = root / "plans.json"
+            write_private(source, authority_with_private_marker(explicit_plan=True))
+
+            migrated = run_cli(
+                "--mode",
+                "migrate",
+                "--source-authority",
+                str(source),
+                "--output",
+                str(input_path),
+            )
+            self.assertEqual(migrated.returncode, 0, migrated.stderr)
+            self.assert_cli_does_not_leak_private_content(migrated)
+
+            extracted = run_cli(
+                "--mode",
+                "extract",
+                "--plans-dir",
+                str(versions),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(extracted.returncode, 0, extracted.stderr)
+            self.assert_cli_does_not_leak_private_content(extracted)
+            self.assertEqual(json.loads(extracted.stdout)["status"], "complete")
+            extracted_payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(extracted_payload["versions"]), 1)
+            self.assertEqual(len(extracted_payload["versions"][0]["plans"]), 1)
+            self.assertNotIn(PRIVATE_MARKER, output.read_text(encoding="utf-8"))
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+            output.write_bytes(b'{"stale": true}\n')
+            os.chmod(output, 0o600)
+            refreshed = run_cli(
+                "--mode",
+                "extract",
+                "--plans-dir",
+                str(versions),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+            self.assert_cli_does_not_leak_private_content(refreshed)
+            refreshed_payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(refreshed_payload["schema_version"], MIGRATE.PLAN_INPUT_SCHEMA)
+            self.assertNotIn("stale", output.read_text(encoding="utf-8"))
+            before_failed_extract = output.read_bytes()
+
+            input_path.write_bytes(("corrupt " + PRIVATE_MARKER).encode("utf-8"))
+            os.chmod(input_path, 0o600)
+            failed_extract = run_cli(
+                "--mode",
+                "extract",
+                "--plans-dir",
+                str(versions),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(failed_extract.returncode, 2)
+            self.assertEqual(failed_extract.stdout, "")
+            self.assertEqual(failed_extract.stderr, "")
+            self.assert_cli_does_not_leak_private_content(failed_extract)
+            self.assertEqual(output.read_bytes(), before_failed_extract)
 
 
 if __name__ == "__main__":
