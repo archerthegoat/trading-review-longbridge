@@ -1,4 +1,4 @@
 interface:
   display_name: "交易日记助手"
-  short_description: "编排计划核对、采访、PA 与用户确认后的交易日记草稿写入"
-  default_prompt: "$daily-trade-journal 请读取当前确认计划和旧日记，先展示脱敏核对，再最多问两条问题；收到回复后调用 $al-brooks-pa，展示草稿并等待“确认写入”。"
+  short_description: "恢复未完成讨论，核对唯一真源并开展用户思考驱动的宏观研讨"
+  default_prompt: "$daily-trade-journal 先从 Obsidian 真源核对并恢复同一复盘上下文中的未完成讨论，再只询问缺口、逐条记录交易并做三方对齐；宏观从我的原始判断出发定向调查新闻、审查逻辑并更新当前宏观形态判断，最后展示草稿并等待“确认写入”。"
