@@ -66,6 +66,9 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
         output: Path,
         *,
         private_preview: Path | None = None,
+        raw_positions: list[dict[str, object]] | None = None,
+        owner_preview: Path | None = None,
+        confirmed_plans: dict[str, object] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         raw_path = root / "raw.json"
         calendar_path = root / "calendar.json"
@@ -87,6 +90,18 @@ class DailyTradeJournalProjectorTests(unittest.TestCase):
         ]
         if private_preview is not None:
             command.extend(["--private-preview", str(private_preview)])
+        if raw_positions is not None:
+            positions_path = root / "positions.json"
+            positions_path.write_text(json.dumps(raw_positions), encoding="utf-8")
+            os.chmod(positions_path, 0o600)
+            command.extend(["--raw-positions", str(positions_path)])
+        if owner_preview is not None:
+            command.extend(["--owner-preview", str(owner_preview)])
+        if confirmed_plans is not None:
+            plans_path = root / "plans.json"
+            plans_path.write_text(json.dumps(confirmed_plans), encoding="utf-8")
+            os.chmod(plans_path, 0o600)
+            command.extend(["--confirmed-plans", str(plans_path)])
         bootstrap = """
 import importlib.util
 from pathlib import Path
@@ -118,8 +133,13 @@ raise SystemExit(project.main(arguments))
         confirmed_at: str,
         plans: list[dict[str, object]],
         context_available: bool = False,
+        holding_underlyings: list[str] | None = None,
+        observation_underlyings: list[str] | None = None,
+        ignored_underlyings: list[str] | None = None,
+        context_underlyings: list[str] | None = None,
+        tool_by_underlying: dict[str, str] | None = None,
     ) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": PROJECT.CONFIRMED_PLAN_SCHEMA_VERSION,
             "version": version,
             "review_date": REVIEW_DATE,
@@ -134,6 +154,15 @@ raise SystemExit(project.main(arguments))
             "plans": plans,
             "context_available": context_available,
         }
+        optional = {
+            "holding_underlyings": holding_underlyings,
+            "observation_underlyings": observation_underlyings,
+            "ignored_underlyings": ignored_underlyings,
+            "context_underlyings": context_underlyings,
+            "tool_by_underlying": tool_by_underlying,
+        }
+        result.update({key: value for key, value in optional.items() if value is not None})
+        return result
 
     def test_complete_merges_split_fills_and_matches_same_row(self) -> None:
         raw = [
@@ -241,6 +270,106 @@ raise SystemExit(project.main(arguments))
             self.assertIn("# 期权核对 · 2026-08-31（美东）", private_text)
             self.assertEqual(public_before, output.read_text(encoding="utf-8"))
             self.assertNotIn("260831C00010000", private_text)
+
+    def test_owner_preview_reconciles_holdings_tools_plan_roles_and_unknown_triggers(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[
+                {
+                    "underlying": "META.US",
+                    "actions": ["sell"],
+                    "tool": "Call",
+                    "status": "confirmed",
+                    "plan_stage": "holding_management",
+                }
+            ],
+            context_available=True,
+            holding_underlyings=["META.US", "TSMX.US"],
+            observation_underlyings=["AAPL.US", "SNOW.US"],
+            ignored_underlyings=["MSTR.US"],
+            context_underlyings=["AAPL.US", "META.US", "MSTR.US", "SNOW.US", "TSMX.US"],
+            tool_by_underlying={
+                "AAPL.US": "Call",
+                "META.US": "Call",
+                "MSTR.US": "Call",
+                "SNOW.US": "Call",
+                "TSMX.US": "single_stock_leveraged_etf",
+            },
+        )
+        envelope = {"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}
+        raw = [option_execution("META260930C00010000.US", side="sell")]
+        payload, projected = PROJECT._project_facts(
+            REVIEW_DATE,
+            raw,
+            trading_calendar=CALENDAR,
+            plans=[envelope],
+        )
+        plans = PROJECT.parse_plans([envelope])
+        positions = [
+            {"symbol": "AAPL260930C00010000.US", "quantity": "private"},
+            {"symbol": "META260930C00010000.US", "available_quantity": "private"},
+            {"symbol": "MSTR260930C00010000.US", "cost_price": "private"},
+            {"underlying": "NONE.US", "tool": "stock"},
+            {"symbol": "SNOW260930C00010000.US"},
+            {"symbol": "TSMX.US"},
+        ]
+        text = PROJECT._owner_preview_text(PROJECT.parse_date(REVIEW_DATE), projected, plans, positions)
+        PROJECT._assert_owner_preview_text(text, PROJECT.parse_date(REVIEW_DATE))
+
+        self.assertEqual(payload["executions"][0]["alignment"], "无法核对")
+        self.assertIn("META.US｜Call｜持仓管理", text)
+        self.assertIn("AAPL.US｜Call｜观察计划（当前已持仓）", text)
+        self.assertIn("SNOW.US｜Call｜观察计划（当前已持仓）", text)
+        self.assertIn("MSTR.US｜Call｜无具体计划", text)
+        self.assertIn("NONE.US｜正股｜未提及", text)
+        self.assertIn("TSMX.US｜单股杠杆 ETF｜持仓管理", text)
+        self.assertIn("META.US｜卖出｜Call｜明确计划｜无法核对", text)
+        for forbidden in (
+            "META260930C00010000",
+            "AAPL260930C00010000",
+            "price",
+            "quantity",
+            "cost_price",
+            "private",
+        ):
+            self.assertNotIn(forbidden, text)
+
+    def test_owner_preview_cli_is_owner_only_and_requires_positions(self) -> None:
+        version = self.version(
+            version="2026-08-31-090000",
+            confirmed_at="2026-08-31T09:00:00-04:00",
+            plans=[],
+            context_available=True,
+            observation_underlyings=["AAPL.US"],
+            context_underlyings=["AAPL.US"],
+            tool_by_underlying={"AAPL.US": "Call"},
+        )
+        envelope = {"schema_version": PROJECT.PLAN_INPUT_SCHEMA_VERSION, "versions": [version]}
+        with tempfile.TemporaryDirectory(prefix="daily-trade-journal-owner-") as directory:
+            root = Path(directory).resolve()
+            os.chmod(root, 0o700)
+            output = root / "facts.json"
+            owner = root / "owner.md"
+            completed = self.run_cli(
+                root,
+                [],
+                output,
+                raw_positions=[{"symbol": "AAPL260930C00010000.US", "quantity": "private"}],
+                owner_preview=owner,
+                confirmed_plans=envelope,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(stat.S_IMODE(owner.stat().st_mode), 0o600)
+            owner_text = owner.read_text(encoding="utf-8")
+            self.assertIn("AAPL.US｜Call｜观察计划（当前已持仓）", owner_text)
+            self.assertNotIn("AAPL260930C00010000", owner_text)
+            self.assertNotIn("private", owner_text)
+
+            orphan = root / "orphan.md"
+            failed = self.run_cli(root, [], output, owner_preview=orphan)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertFalse(orphan.exists())
 
     def test_malformed_option_components_fail_without_private_preview_or_raw_symbol(self) -> None:
         malformed = (

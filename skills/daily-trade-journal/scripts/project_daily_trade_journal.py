@@ -28,6 +28,7 @@ CONFIRMED_PLAN_SCHEMA_VERSION = "daily-trade-journal-confirmed-plan.v1"
 PLAN_INPUT_SCHEMA_VERSION = "daily-trade-journal-plan-input.v1"
 STATUSES = frozenset({"complete", "empty", "blocked"})
 ALIGNMENTS = frozenset({"按计划", "偏离计划", "无法核对"})
+PLAN_MENTIONS = frozenset({"明确计划", "观察计划", "仅上下文", "无具体计划", "未提及", "无法读取"})
 TOOLS = frozenset({"正股", "单股杠杆 ETF", "0DTE 期权", "其他期权", "无法识别"})
 OPTION_TOOLS = frozenset({"0DTE 期权", "其他期权"})
 # Public facts never expose the option right.  The explicitly authorized
@@ -50,6 +51,8 @@ PLAN_OPTION_RIGHT_ALIASES = {
     "long-put": "Put",
 }
 PRIVATE_OPTION_COLUMNS = "标的｜动作｜到期日｜Call / Put｜行权价｜工具｜对齐结果"
+OWNER_EXECUTION_COLUMNS = "标的｜动作｜工具｜计划提及｜计划对齐"
+OWNER_HOLDING_COLUMNS = "当前持仓｜工具｜计划状态"
 CONTEXT_NOTE = "已找到事前确认的计划背景，但其中缺少可机械核对的明确动作或触发证据，因此相关交易保持“无法核对”。"
 NY_TZ = ZoneInfo("America/New_York")
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -113,6 +116,21 @@ RAW_ROW_KEYS = frozenset(
         "underlying",
     }
 )
+POSITION_ROW_KEYS = frozenset(
+    {
+        "symbol",
+        "name",
+        "symbol_name",
+        "quantity",
+        "available",
+        "available_quantity",
+        "cost_price",
+        "currency",
+        "market",
+        "underlying",
+        "tool",
+    }
+)
 INSTRUMENT_KEYS = frozenset({"tool_kind", "underlying"})
 PLAN_ENVELOPE_KEYS = frozenset(
     {
@@ -142,8 +160,23 @@ PLAN_VERSION_KEYS = frozenset(
         "approved_draft_hash",
         "plans",
         "context_available",
+        "holding_underlyings",
+        "observation_underlyings",
+        "ignored_underlyings",
+        "context_underlyings",
+        "tool_by_underlying",
     }
 )
+PLAN_VERSION_ROLE_KEYS = frozenset(
+    {
+        "holding_underlyings",
+        "observation_underlyings",
+        "ignored_underlyings",
+        "context_underlyings",
+        "tool_by_underlying",
+    }
+)
+PLAN_VERSION_REQUIRED_KEYS = PLAN_VERSION_KEYS - PLAN_VERSION_ROLE_KEYS
 PLAN_ROW_KEYS = frozenset(
     {
         "underlying",
@@ -258,6 +291,12 @@ class ExecutionFact(NamedTuple):
     option: OptionContract | None
 
 
+class PositionFact(NamedTuple):
+    underlying: str
+    tool: str
+    option_right: str | None
+
+
 class PlanFact(NamedTuple):
     underlying: str
     actions: tuple[str, ...]
@@ -269,6 +308,7 @@ class PlanFact(NamedTuple):
     confirmed_at: dt.datetime | None
     expires_at: dt.datetime | None
     market_date: dt.date | None
+    plan_stage: str | None
     order: int
 
 
@@ -279,6 +319,11 @@ class PlanVersionFact(NamedTuple):
     effective_at: dt.datetime
     plans: tuple[PlanFact, ...]
     context_available: bool
+    holding_underlyings: tuple[str, ...]
+    observation_underlyings: tuple[str, ...]
+    ignored_underlyings: tuple[str, ...]
+    context_underlyings: tuple[str, ...]
+    tool_by_underlying: tuple[tuple[str, str], ...]
     order: int
 
 
@@ -835,6 +880,9 @@ def parse_plan_row(
             if market_date is not None and market_date != current:
                 raise ProjectionError("plan dates conflict")
             market_date = current
+    plan_stage = row.get("plan_stage")
+    if plan_stage is not None and plan_stage != "holding_management":
+        raise ProjectionError("plan stage is unsupported")
     return PlanFact(
         underlying=underlying,
         actions=actions,
@@ -846,6 +894,7 @@ def parse_plan_row(
         confirmed_at=confirmed_at,
         expires_at=expires_at,
         market_date=market_date,
+        plan_stage=plan_stage,
         order=order,
     )
 
@@ -874,8 +923,41 @@ def _plan_rows_from_value(value: Any) -> list[Any]:
     return rows
 
 
+def _underlying_list(value: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    if key not in value:
+        return ()
+    rows = value[key]
+    if not isinstance(rows, list) or len(rows) > MAX_ROWS:
+        raise ProjectionError("confirmed plan role list is invalid")
+    normalized = tuple(normalize_underlying(item) for item in rows)
+    if len(set(normalized)) != len(normalized):
+        raise ProjectionError("confirmed plan role list contains duplicates")
+    return normalized
+
+
+def _underlying_tool_map(value: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    rows = value.get("tool_by_underlying", {})
+    if not isinstance(rows, dict) or len(rows) > MAX_ROWS:
+        raise ProjectionError("confirmed plan tool map is invalid")
+    result: list[tuple[str, str]] = []
+    for underlying, tool_value in rows.items():
+        normalized_underlying = normalize_underlying(underlying)
+        tool, option_right = _normalize_plan_tool(tool_value)
+        owner_tool = option_right or tool
+        if owner_tool not in {"正股", "单股杠杆 ETF", "Call", "Put"}:
+            raise ProjectionError("confirmed plan tool map value is invalid")
+        result.append((normalized_underlying, owner_tool))
+    if len({underlying for underlying, _ in result}) != len(result):
+        raise ProjectionError("confirmed plan tool map contains duplicates")
+    return tuple(sorted(result))
+
+
 def _parse_plan_version(value: Any, *, order: int, row_order: int) -> tuple[PlanVersionFact, list[PlanFact]]:
-    if not isinstance(value, dict) or set(value) != PLAN_VERSION_KEYS:
+    if (
+        not isinstance(value, dict)
+        or not PLAN_VERSION_REQUIRED_KEYS <= set(value)
+        or not set(value) <= PLAN_VERSION_KEYS
+    ):
         raise ProjectionError("confirmed plan version fields are unsupported")
     if value.get("schema_version") != CONFIRMED_PLAN_SCHEMA_VERSION:
         raise ProjectionError("confirmed plan input schema is unsupported")
@@ -895,6 +977,18 @@ def _parse_plan_version(value: Any, *, order: int, row_order: int) -> tuple[Plan
             raise ProjectionError("confirmed plan hash is invalid")
     if type(value.get("context_available")) is not bool:
         raise ProjectionError("confirmed plan context signal is invalid")
+    holding_underlyings = _underlying_list(value, "holding_underlyings")
+    observation_underlyings = _underlying_list(value, "observation_underlyings")
+    ignored_underlyings = _underlying_list(value, "ignored_underlyings")
+    context_underlyings = _underlying_list(value, "context_underlyings")
+    tool_by_underlying = _underlying_tool_map(value)
+    role_sets = [set(holding_underlyings), set(observation_underlyings), set(ignored_underlyings)]
+    if any(left & right for index, left in enumerate(role_sets) for right in role_sets[index + 1 :]):
+        raise ProjectionError("confirmed plan roles conflict")
+    if context_underlyings and not set().union(*role_sets) <= set(context_underlyings):
+        raise ProjectionError("confirmed plan context roles conflict")
+    if tool_by_underlying and not {underlying for underlying, _ in tool_by_underlying} <= set(context_underlyings):
+        raise ProjectionError("confirmed plan tool map conflicts with context")
     rows = value.get("plans")
     if not isinstance(rows, list) or len(rows) > MAX_ROWS:
         raise ProjectionError("confirmed plan rows are invalid")
@@ -917,6 +1011,11 @@ def _parse_plan_version(value: Any, *, order: int, row_order: int) -> tuple[Plan
             effective_at=effective_at,
             plans=tuple(facts),
             context_available=value["context_available"],
+            holding_underlyings=holding_underlyings,
+            observation_underlyings=observation_underlyings,
+            ignored_underlyings=ignored_underlyings,
+            context_underlyings=context_underlyings,
+            tool_by_underlying=tool_by_underlying,
             order=order,
         ),
         facts,
@@ -1037,6 +1136,11 @@ def _alignment_for_rows(execution: ExecutionFact, plans: Sequence[PlanFact]) -> 
         if len(outcomes) > 1:
             return "无法核对"
     plan = max(latest, key=lambda item: item.order)
+    # A confirmed holding-management narrative proves that a plan exists, but
+    # its price/PA trigger is not represented in this execution-only input.
+    # Keep alignment unknown until that condition is separately evidenced.
+    if plan.plan_stage == "holding_management":
+        return "无法核对"
     if plan.prohibited:
         return "偏离计划"
     if _plan_matches_execution(execution, plan):
@@ -1077,6 +1181,152 @@ def _context_only_for_execution(execution: ExecutionFact, plans: PlanCollection)
     latest_priority = max(_version_priority(version)[:2] for version in prior_versions)
     latest = [version for version in prior_versions if _version_priority(version)[:2] == latest_priority]
     return len(latest) == 1 and latest[0].context_available and not latest[0].plans
+
+
+def _latest_prior_version(plans: PlanCollection, instant: dt.datetime) -> PlanVersionFact | None:
+    prior = [version for version in plans.versions if _version_is_prior(version, instant)]
+    if not prior:
+        return None
+    priority = max(_version_priority(version)[:2] for version in prior)
+    latest = [version for version in prior if _version_priority(version)[:2] == priority]
+    return latest[0] if len(latest) == 1 else None
+
+
+def _latest_version(plans: PlanCollection) -> PlanVersionFact | None:
+    if not plans.versions:
+        return None
+    priority = max(_version_priority(version)[:2] for version in plans.versions)
+    latest = [version for version in plans.versions if _version_priority(version)[:2] == priority]
+    return latest[0] if len(latest) == 1 else None
+
+
+def plan_mention_for(execution: ExecutionFact, plans: PlanCollection) -> str:
+    if plans.versions:
+        version = _latest_prior_version(plans, execution.instant)
+        if version is None:
+            return "无法读取"
+        if any(plan.underlying == execution.underlying for plan in version.plans):
+            return "明确计划"
+        if execution.underlying in version.holding_underlyings:
+            return "明确计划"
+        if execution.underlying in version.observation_underlyings:
+            return "观察计划"
+        if execution.underlying in version.ignored_underlyings:
+            return "无具体计划"
+        if execution.underlying in version.context_underlyings:
+            return "仅上下文"
+        return "未提及"
+    related = [
+        plan
+        for plan in plans.plans
+        if plan.underlying == execution.underlying and _plan_is_prior(plan, execution.instant)
+    ]
+    return "明确计划" if related else "未提及"
+
+
+def project_position(row: Any, review_date: str | dt.date) -> PositionFact:
+    review = parse_date(review_date) if isinstance(review_date, str) else review_date
+    if not isinstance(row, dict) or not set(row) <= POSITION_ROW_KEYS:
+        raise ProjectionError("position row contains unsupported fields")
+    if "underlying" in row or "tool" in row:
+        if set(row) != {"underlying", "tool"}:
+            raise ProjectionError("sanitized position row is incomplete")
+        underlying = normalize_underlying(row["underlying"])
+        tool, option_right = _normalize_plan_tool(row["tool"])
+        owner_tool = option_right or tool
+        if owner_tool not in {"正股", "单股杠杆 ETF", "Call", "Put"}:
+            raise ProjectionError("sanitized position tool is invalid")
+        return PositionFact(underlying=underlying, tool=owner_tool, option_right=option_right)
+    if "symbol" not in row:
+        raise ProjectionError("position symbol is missing")
+    underlying, same_day, is_option, option = _parse_symbol(row["symbol"], review)
+    if is_option:
+        right = OPTION_RIGHT_LABELS.get(option.right) if option is not None else None
+        if right is None:
+            raise ProjectionError("position option right is invalid")
+        tool = f"0DTE {right}" if same_day else right
+        return PositionFact(underlying=underlying, tool=tool, option_right=right)
+    return PositionFact(underlying=underlying, tool="正股", option_right=None)
+
+
+def _holding_plan_state(position: PositionFact, plans: PlanCollection) -> str:
+    version = _latest_version(plans)
+    if version is None:
+        return "无法读取"
+    if position.underlying in version.holding_underlyings:
+        return "持仓管理"
+    if position.underlying in version.observation_underlyings:
+        return "观察计划（当前已持仓）"
+    if position.underlying in version.ignored_underlyings:
+        return "无具体计划"
+    if position.underlying in version.context_underlyings:
+        return "仅上下文"
+    return "未提及"
+
+
+def _holding_tool(position: PositionFact, plans: PlanCollection) -> str:
+    if position.option_right is not None:
+        return position.tool
+    version = _latest_version(plans)
+    if version is None:
+        return position.tool
+    confirmed_tool = dict(version.tool_by_underlying).get(position.underlying)
+    return confirmed_tool if confirmed_tool in {"正股", "单股杠杆 ETF"} else position.tool
+
+
+def _owner_tool(fact: ExecutionFact) -> str:
+    if fact.option is None:
+        return fact.tool
+    right = OPTION_RIGHT_LABELS[fact.option.right]
+    return f"0DTE {right}" if fact.tool == "0DTE 期权" else right
+
+
+def _owner_preview_text(
+    review_date: dt.date,
+    projected: Sequence[tuple[ExecutionFact, str]],
+    plans: PlanCollection,
+    raw_positions: Any | None,
+) -> str:
+    if raw_positions is None:
+        position_rows: list[Any] = []
+    elif isinstance(raw_positions, list):
+        position_rows = raw_positions
+    elif isinstance(raw_positions, dict) and set(raw_positions) <= {"positions", "status"}:
+        status = raw_positions.get("status")
+        if status not in {None, "complete", "empty"} or not isinstance(raw_positions.get("positions"), list):
+            raise ProjectionError("position input is blocked")
+        position_rows = raw_positions["positions"]
+        if status == "empty" and position_rows:
+            raise ProjectionError("empty position input contains rows")
+    else:
+        raise ProjectionError("position input envelope is unsupported")
+    positions = {project_position(row, review_date) for row in position_rows}
+
+    lines = [
+        f"# 当前持仓与交易核对 · {review_date.isoformat()}（美东）",
+        "",
+        "仅供当前用户核对；不含数量、价格、成本、账户标识或完整期权合约。",
+        "",
+        "## 当前持仓 × 计划",
+        "",
+        OWNER_HOLDING_COLUMNS,
+    ]
+    for position in sorted(positions, key=lambda item: (item.underlying, item.tool)):
+        lines.append("｜".join((position.underlying, _holding_tool(position, plans), _holding_plan_state(position, plans))))
+    if not positions:
+        lines.append("（本次未提供当前持仓。）")
+
+    lines.extend(["", "## 交易明细 × 计划", "", OWNER_EXECUTION_COLUMNS])
+    grouped: dict[tuple[str, str, str, str], list[str]] = {}
+    for fact, alignment in projected:
+        key = (fact.underlying, fact.action, _owner_tool(fact), plan_mention_for(fact, plans))
+        grouped.setdefault(key, []).append(alignment)
+    for key in sorted(grouped):
+        underlying, action, tool, mention = key
+        lines.append("｜".join((underlying, action, tool, mention, _merge_alignment(grouped[key]))))
+    if not grouped:
+        lines.append("（本次没有交易明细。）")
+    return "\n".join(lines) + "\n"
 
 
 def _merge_alignment(values: Sequence[str]) -> str:
@@ -1271,6 +1521,78 @@ def _assert_private_preview_text(text: str, review_date: dt.date) -> None:
     )
     if forbidden.search(text):
         raise ProjectionError("private preview contains forbidden field")
+
+
+def _assert_owner_preview_text(text: str, review_date: dt.date) -> None:
+    if not isinstance(text, str) or not text.startswith(
+        f"# 当前持仓与交易核对 · {review_date.isoformat()}（美东）\n"
+    ):
+        raise ProjectionError("owner preview header is invalid")
+    lines = text.splitlines()
+    expected = {
+        "## 当前持仓 × 计划": OWNER_HOLDING_COLUMNS,
+        "## 交易明细 × 计划": OWNER_EXECUTION_COLUMNS,
+    }
+    indexes: dict[str, int] = {}
+    for heading, columns in expected.items():
+        if lines.count(heading) != 1:
+            raise ProjectionError("owner preview section is invalid")
+        index = lines.index(heading)
+        if index + 2 >= len(lines) or lines[index + 2] != columns:
+            raise ProjectionError("owner preview columns are invalid")
+        indexes[heading] = index
+    holdings_start = indexes["## 当前持仓 × 计划"] + 3
+    executions_heading = indexes["## 交易明细 × 计划"]
+    holding_lines = [line for line in lines[holdings_start:executions_heading] if line]
+    if not holding_lines:
+        raise ProjectionError("owner holding rows are missing")
+    if holding_lines == ["（本次未提供当前持仓。）"]:
+        pass
+    else:
+        for line in holding_lines:
+            fields = line.split("｜")
+            if len(fields) != 3:
+                raise ProjectionError("owner holding row fields are invalid")
+            underlying, tool, state = fields
+            if not US_TICKER_RE.fullmatch(underlying):
+                raise ProjectionError("owner holding underlying is invalid")
+            if tool not in {"正股", "单股杠杆 ETF", "Call", "Put", "0DTE Call", "0DTE Put"}:
+                raise ProjectionError("owner holding tool is invalid")
+            if state not in {
+                "持仓管理",
+                "观察计划（当前已持仓）",
+                "无具体计划",
+                "仅上下文",
+                "未提及",
+                "无法读取",
+            }:
+                raise ProjectionError("owner holding plan state is invalid")
+    execution_lines = [
+        line
+        for line in lines[indexes["## 交易明细 × 计划"] + 3 :]
+        if line
+    ]
+    if not execution_lines:
+        raise ProjectionError("owner execution rows are missing")
+    if execution_lines == ["（本次没有交易明细。）"]:
+        pass
+    else:
+        for line in execution_lines:
+            fields = line.split("｜")
+            if len(fields) != 5:
+                raise ProjectionError("owner execution row fields are invalid")
+            underlying, action, tool, mention, alignment = fields
+            if not US_TICKER_RE.fullmatch(underlying) or action not in {"买入", "卖出"}:
+                raise ProjectionError("owner execution identity is invalid")
+            if tool not in {"正股", "单股杠杆 ETF", "Call", "Put", "0DTE Call", "0DTE Put"}:
+                raise ProjectionError("owner execution tool is invalid")
+            if mention not in PLAN_MENTIONS or alignment not in ALIGNMENTS:
+                raise ProjectionError("owner execution plan result is invalid")
+    forbidden = re.compile(
+        r"(?i)(?:order[_ -]?id|execution[_ -]?id|account[_ -]?(?:id|number)|price|quantity|qty|cost|commission|fee|long[ _-]?call|\d{6}[CP]\d{4,}|\$\d)"
+    )
+    if forbidden.search(text):
+        raise ProjectionError("owner preview contains forbidden field")
 
 
 def _project_facts(
@@ -1498,6 +1820,36 @@ def write_private_preview(path_value: str | os.PathLike[str], text: str, *, revi
     return path
 
 
+def write_owner_preview(path_value: str | os.PathLike[str], text: str, *, review_date: dt.date) -> Path:
+    _assert_owner_preview_text(text, review_date)
+    path = _validate_private_preview_path(path_value, output_path=None, input_paths=())
+    content = text.encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+        info = path.lstat()
+        if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise ProjectionError("owner preview permissions are unsafe")
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Project sanitized daily trade journal facts")
     parser.add_argument("--review-date", required=True)
@@ -1508,6 +1860,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--intraday-revisions")
     parser.add_argument("--output", required=True)
     parser.add_argument("--private-preview", help="optional owner-only Markdown option contract preview")
+    parser.add_argument("--raw-positions", help="optional owner-only current position input")
+    parser.add_argument("--owner-preview", help="optional owner-only holdings and plan reconciliation preview")
     return parser
 
 
@@ -1539,6 +1893,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if candidate == output_path:
                     raise ProjectionError("output must differ from input")
                 input_paths.append(candidate)
+        if (args.raw_positions is None) != (args.owner_preview is None):
+            raise ProjectionError("owner preview and raw positions must be supplied together")
+        raw_positions_path = None
+        if args.raw_positions is not None:
+            raw_positions_path = _absolute_no_links(args.raw_positions)
+            if raw_positions_path == output_path:
+                raise ProjectionError("output must differ from input")
+            input_paths.append(raw_positions_path)
         private_preview_path = None
         if args.private_preview is not None:
             private_preview_path = _validate_private_preview_path(
@@ -1546,9 +1908,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=output_path,
                 input_paths=input_paths,
             )
+        owner_preview_path = None
+        if args.owner_preview is not None:
+            owner_preview_path = _validate_private_preview_path(
+                args.owner_preview,
+                output_path=output_path,
+                input_paths=input_paths,
+            )
+        if private_preview_path is not None and private_preview_path == owner_preview_path:
+            raise ProjectionError("preview outputs must differ")
         preflight_complete = True
         raw = read_input_json(raw_path)
         calendar = read_input_json(args.trading_calendar)
+        raw_positions = read_input_json(raw_positions_path) if raw_positions_path is not None else None
         plan_values: list[Any] = []
         for option in (args.confirmed_plans, args.weekly_plan, args.intraday_revisions):
             if option:
@@ -1564,9 +1936,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if private_preview_path is not None
             else None
         )
+        owner_text = None
+        if owner_preview_path is not None:
+            parsed_plans = parse_plans(plan_values)
+            owner_text = _owner_preview_text(review, projected, parsed_plans, raw_positions)
+            _assert_owner_preview_text(owner_text, review)
         write_output(output_path, result)
         if private_preview_path is not None and preview_text is not None:
             write_private_preview(private_preview_path, preview_text, review_date=review)
+        if owner_preview_path is not None and owner_text is not None:
+            write_owner_preview(owner_preview_path, owner_text, review_date=review)
         return 0
     except (ProjectionError, OSError, json.JSONDecodeError, TypeError, ValueError):
         # A fixed blocked envelope is safe to retain only after every output,

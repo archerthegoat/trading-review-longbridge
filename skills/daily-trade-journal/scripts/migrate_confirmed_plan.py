@@ -82,6 +82,7 @@ PLAN_KEYS = frozenset(
     {
         "underlying",
         "action",
+        "actions",
         "tool",
         "status",
         "confirmed",
@@ -89,6 +90,7 @@ PLAN_KEYS = frozenset(
         "confirmed_at",
         "effective_at",
         "expires_at",
+        "plan_stage",
     }
 )
 PLAN_VERSION_KEYS = frozenset(
@@ -109,6 +111,21 @@ PLAN_VERSION_KEYS = frozenset(
     }
 )
 SOURCE_SNAPSHOT_KEYS = frozenset({"candidates", "holdings", "global_rules", "open_questions"})
+RICH_PLAN_KEYS = frozenset(
+    {
+        "action",
+        "confirmation_gap",
+        "data_status",
+        "display_symbol",
+        "pa_reference",
+        "status",
+        "timeframe",
+        "tool_kind",
+        "trigger",
+        "user_thought",
+    }
+)
+RICH_PLAN_SOURCE_SCHEMA = "trading-review-human-confirmed-summary.v1"
 ACTION_ALIASES = {"buy", "sell", "买入", "卖出"}
 TOOL_ALIASES = {
     "stock",
@@ -376,6 +393,144 @@ def _normalized_tool(value: Any) -> str | None:
     return aliases.get(cleaned) or aliases.get(cleaned.lower())
 
 
+def _display_underlying(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().upper()
+    if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,20}", cleaned):
+        return cleaned if cleaned.endswith(".US") else f"{cleaned}.US"
+    return None
+
+
+def _actual_underlying(value: Any) -> str | None:
+    direct = _safe_symbol(value)
+    if direct is not None:
+        return direct
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"([A-Z][A-Z0-9.\-]{0,20})\s+option", value.strip(), re.IGNORECASE)
+    return f"{match.group(1).upper()}.US" if match else None
+
+
+def _rich_tool(value: Any) -> str | None:
+    normalized = _normalized_tool(value)
+    if normalized is not None:
+        return normalized
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    lowered = cleaned.lower()
+    if "待确认" in cleaned or lowered.startswith("沿用"):
+        return None
+    if lowered in {"actual_broker_call", "user_label_long_call_actual_broker_call"}:
+        return "Call"
+    if "long call" in lowered:
+        return "Call"
+    if "long put" in lowered:
+        return "Put"
+    if lowered == "stock" or cleaned.startswith("Stock"):
+        return "正股"
+    return None
+
+
+def _rich_actions(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, str):
+        return ()
+    actions: list[str] = []
+    if "加仓" in value or value.strip() in {"计划买入", "买入"}:
+        actions.append("买入")
+    if "减仓" in value or "退出" in value or value.strip() == "卖出":
+        actions.append("卖出")
+    return tuple(actions)
+
+
+def _snapshot_identity_rows(snapshot: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    for key in ("holdings", "candidates"):
+        for row in snapshot[key]:
+            if isinstance(row, dict):
+                yield row
+
+
+def _update_identity_registry(snapshot: Mapping[str, Any], registry: dict[str, tuple[str, str]]) -> None:
+    for row in _snapshot_identity_rows(snapshot):
+        display = _display_underlying(row.get("display_symbol"))
+        actual = _actual_underlying(row.get("actual_trade_symbol")) or display
+        tool = _rich_tool(row.get("tool")) or _rich_tool(row.get("tool_kind"))
+        if display is None or actual is None or tool is None:
+            continue
+        registry[display] = (actual, tool)
+
+
+def _role_underlyings(
+    rows: Iterable[Mapping[str, Any]],
+    registry: Mapping[str, tuple[str, str]],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    holdings: set[str] = set()
+    observations: set[str] = set()
+    ignored: set[str] = set()
+    context: set[str] = set()
+    for row in rows:
+        display = _display_underlying(row.get("display_symbol"))
+        if display is None:
+            continue
+        underlying = registry.get(display, (display, ""))[0]
+        context.add(underlying)
+        status = str(row.get("status", "")).strip().lower()
+        action = str(row.get("action", "")).strip()
+        if status == "ignored" or action.lower() == "no specific plan":
+            ignored.add(underlying)
+        elif status == "holding_management_intent" or action.startswith("持仓管理"):
+            holdings.add(underlying)
+        else:
+            observations.add(underlying)
+    return sorted(holdings), sorted(observations), sorted(ignored), sorted(context)
+
+
+def _normalize_rich_plans(
+    rows: list[Any],
+    *,
+    confirmed_at: dt.datetime,
+    effective_at: dt.datetime,
+    registry: Mapping[str, tuple[str, str]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or not set(row) <= RICH_PLAN_KEYS:
+            raise PlanError("rich plan row fields are unsupported")
+        display = _display_underlying(row.get("display_symbol"))
+        if display is None:
+            raise PlanError("rich plan display symbol is invalid")
+        status = str(row.get("status", "")).strip()
+        action_value = row.get("action")
+        actions = _rich_actions(action_value)
+        is_holding = status == "holding_management_intent" or (
+            isinstance(action_value, str) and action_value.startswith("持仓管理")
+        )
+        # Observation rows remain context.  They are not promoted into exact
+        # execution plans merely because their containing version is confirmed.
+        if not is_holding or not actions:
+            continue
+        inherited = registry.get(display)
+        underlying = inherited[0] if inherited is not None else display
+        tool = _rich_tool(row.get("tool_kind")) or (inherited[1] if inherited is not None else None)
+        if tool is None:
+            # The holding plan still remains visible as context, but cannot be
+            # exact alignment evidence without a confirmed tool identity.
+            continue
+        result.append(
+            {
+                "underlying": underlying,
+                "actions": list(actions),
+                "tool": tool,
+                "status": "confirmed",
+                "confirmed_at": confirmed_at.isoformat(),
+                "effective_at": effective_at.isoformat(),
+                "plan_stage": "holding_management",
+            }
+        )
+    return result
+
+
 def _explicit_confirmed(row: Mapping[str, Any]) -> bool:
     """Apply only explicit exclusion markers to an outer-confirmed row.
 
@@ -579,13 +734,22 @@ def _validate_snapshot(value: Any) -> None:
 def _validate_plan_row(row: Any, inherited_confirmed_at: dt.datetime, inherited_effective_at: dt.datetime) -> dict[str, Any]:
     if not isinstance(row, dict) or not set(row) <= PLAN_KEYS:
         raise PlanError("plan row fields are unsupported")
-    if set(row) < {"underlying", "action", "tool"}:
+    if "underlying" not in row or "tool" not in row or ("action" not in row and "actions" not in row):
         raise PlanError("plan row is incomplete")
     if _safe_symbol(row["underlying"]) is None:
         raise PlanError("plan underlying is invalid")
-    if _normalized_action(row["action"]) is None:
+    action_values = row.get("actions")
+    if action_values is not None:
+        if (
+            "action" in row
+            or not isinstance(action_values, list)
+            or not action_values
+            or any(_normalized_action(item) is None for item in action_values)
+        ):
+            raise PlanError("plan actions are invalid")
+    elif _normalized_action(row["action"]) is None:
         raise PlanError("plan action is invalid")
-    if _normalized_tool(row["tool"]) is None:
+    if _normalized_tool(row["tool"]) is None and row["tool"] not in {"Call", "Put"}:
         raise PlanError("plan tool is invalid")
     if "status" in row and row["status"] not in {"confirmed", "active"}:
         raise PlanError("plan row is not confirmed")
@@ -594,10 +758,12 @@ def _validate_plan_row(row: Any, inherited_confirmed_at: dt.datetime, inherited_
     for key in ("confirmed_at", "effective_at", "expires_at"):
         if key in row:
             _parse_instant(row[key])
+    if "plan_stage" in row and row["plan_stage"] != "holding_management":
+        raise PlanError("plan stage is invalid")
     return dict(row)
 
 
-def _parse_version(payload: Any) -> dict[str, Any]:
+def _parse_version(payload: Any, identity_registry: dict[str, tuple[str, str]] | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict) or set(payload) != PLAN_VERSION_KEYS:
         raise PlanError("plan version fields are unsupported")
     if payload["schema_version"] != PLAN_SCHEMA or payload["status"] != "confirmed" or payload["confirmation_status"] != "confirmed":
@@ -615,15 +781,40 @@ def _parse_version(payload: Any) -> dict[str, Any]:
     _validate_snapshot(payload["source_snapshot"])
     if not isinstance(payload["plans"], list) or len(payload["plans"]) > MAX_ROWS:
         raise PlanError("plan rows are invalid")
-    rows = [_validate_plan_row(row, confirmed_at, effective_at) for row in payload["plans"]]
+    registry = identity_registry if identity_registry is not None else {}
+    _update_identity_registry(payload["source_snapshot"], registry)
+    if payload["source_schema"] == RICH_PLAN_SOURCE_SCHEMA:
+        normalized_rows = _normalize_rich_plans(
+            payload["plans"],
+            confirmed_at=confirmed_at,
+            effective_at=effective_at,
+            registry=registry,
+        )
+    else:
+        normalized_rows = payload["plans"]
+    rows = [_validate_plan_row(row, confirmed_at, effective_at) for row in normalized_rows]
     seen = set()
     for row in rows:
-        key = (row["underlying"], row["action"], row["tool"], row.get("effective_at"), row.get("expires_at"))
+        actions = tuple(row.get("actions", [row.get("action")]))
+        key = (row["underlying"], actions, row["tool"], row.get("effective_at"), row.get("expires_at"))
         if key in seen:
             raise PlanError("duplicate plan row")
         seen.add(key)
     source_snapshot = payload["source_snapshot"]
     context_available = any(bool(source_snapshot[key]) for key in SOURCE_SNAPSHOT_KEYS)
+    role_rows = [*source_snapshot["holdings"], *source_snapshot["candidates"]]
+    if payload["source_schema"] == RICH_PLAN_SOURCE_SCHEMA:
+        role_rows = payload["plans"]
+    holding_underlyings, observation_underlyings, ignored_underlyings, context_underlyings = _role_underlyings(
+        role_rows,
+        registry,
+    )
+    role_underlyings = set(context_underlyings)
+    tool_by_underlying = {
+        actual: tool
+        for actual, tool in registry.values()
+        if actual in role_underlyings
+    }
     return {
         "schema_version": PLAN_SCHEMA,
         "version": payload["version"],
@@ -641,10 +832,15 @@ def _parse_version(payload: Any) -> dict[str, Any]:
         # validated source snapshot; the projector receives only this boolean,
         # never the snapshot or its free text.
         "context_available": context_available,
+        "holding_underlyings": holding_underlyings,
+        "observation_underlyings": observation_underlyings,
+        "ignored_underlyings": ignored_underlyings,
+        "context_underlyings": context_underlyings,
+        "tool_by_underlying": tool_by_underlying,
     }
 
 
-def _extract_markdown(text: str) -> dict[str, Any]:
+def _extract_markdown(text: str, identity_registry: dict[str, tuple[str, str]] | None = None) -> dict[str, Any]:
     lines = text.splitlines()
     starts = [i for i, line in enumerate(lines) if line == MARKER_START]
     ends = [i for i, line in enumerate(lines) if line == MARKER_END]
@@ -652,7 +848,7 @@ def _extract_markdown(text: str) -> dict[str, Any]:
         raise PlanError("managed plan block is missing or duplicated")
     body = "\n".join(lines[starts[0] + 1 : ends[0]]).strip().encode("utf-8")
     payload = _parse_json(body)
-    return _parse_version(payload)
+    return _parse_version(payload, identity_registry)
 
 
 def extract(plans_dir: str, output_path: str) -> dict[str, Any]:
@@ -673,10 +869,11 @@ def extract(plans_dir: str, output_path: str) -> dict[str, Any]:
         raise PlanError("extract output conflicts with immutable plan version")
     versions: list[dict[str, Any]] = []
     seen: set[str] = set()
+    identity_registry: dict[str, tuple[str, str]] = {}
     for path in paths:
         if path.is_symlink():
             raise PlanError("symbolic links are not accepted")
-        version = _extract_markdown(_read_owner_text(path))
+        version = _extract_markdown(_read_owner_text(path), identity_registry)
         if version["version"] in seen:
             raise PlanError("duplicate plan version")
         seen.add(version["version"])

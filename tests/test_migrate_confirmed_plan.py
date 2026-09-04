@@ -120,6 +120,125 @@ class ConfirmedPlanMigrationTests(unittest.TestCase):
         self.assertNotIn(PRIVATE_MARKER, completed.stdout)
         self.assertNotIn(PRIVATE_MARKER, completed.stderr)
 
+    def test_rich_confirmed_summary_inherits_tool_identity_and_separates_roles(self) -> None:
+        def version_payload(
+            *,
+            version: str,
+            source_schema: str,
+            plans: list[dict[str, object]],
+            candidates: list[dict[str, object]],
+            holdings: list[dict[str, object]],
+        ) -> dict[str, object]:
+            return {
+                "schema_version": MIGRATE.PLAN_SCHEMA,
+                "version": version,
+                "review_date": version[:10],
+                "status": "confirmed",
+                "confirmation_status": "confirmed",
+                "confirmed_at": f"{version[:10]}T09:00:00+08:00",
+                "effective_at": f"{version[:10]}T09:00:00+08:00",
+                "source_schema": source_schema,
+                "source_content_hash": "a" * 64,
+                "approved_draft_schema_version": "synthetic.v1",
+                "approved_draft_hash": "b" * 64,
+                "plans": plans,
+                "source_snapshot": {
+                    "candidates": candidates,
+                    "holdings": holdings,
+                    "global_rules": {},
+                    "open_questions": [],
+                },
+            }
+
+        older_holdings = [
+            {
+                "display_symbol": "HOLD",
+                "actual_trade_symbol": "HOLD option",
+                "action": "manage",
+                "status": "holding_management_intent",
+                "tool_kind": "actual_broker_call",
+            },
+            {
+                "display_symbol": "TRACK",
+                "actual_trade_symbol": "TRACKX.US",
+                "action": "manage",
+                "status": "holding_management_intent",
+                "tool_kind": "single_stock_leveraged_etf",
+            },
+            {
+                "display_symbol": "OMIT",
+                "actual_trade_symbol": "OMIT option",
+                "action": "no specific plan",
+                "status": "ignored",
+                "tool_kind": "actual_broker_call",
+            },
+        ]
+        rich_plans = [
+            {
+                "display_symbol": "HOLD",
+                "action": "持仓管理：减仓/退出",
+                "tool_kind": "沿用当前持仓工具",
+                "status": "holding_management_intent",
+                "timeframe": "1D",
+                "pa_reference": "synthetic",
+                "user_thought": "synthetic",
+                "confirmation_gap": "synthetic",
+            },
+            {
+                "display_symbol": "TRACK",
+                "action": "持仓管理：减仓",
+                "tool_kind": "沿用旧版本对应工具",
+                "status": "holding_management_intent",
+                "timeframe": "1D",
+                "pa_reference": "synthetic",
+                "user_thought": "synthetic",
+                "confirmation_gap": "synthetic",
+            },
+            {
+                "display_symbol": "WATCH",
+                "action": "计划买入",
+                "tool_kind": "Long Call",
+                "status": "观察",
+                "timeframe": "1D",
+                "pa_reference": "synthetic",
+                "user_thought": "synthetic",
+                "confirmation_gap": "synthetic",
+            },
+        ]
+        older = version_payload(
+            version="2026-09-01-090000",
+            source_schema="trading-review-confirmed-authority.v1",
+            plans=[],
+            candidates=[],
+            holdings=older_holdings,
+        )
+        newer = version_payload(
+            version="2026-09-03-090000",
+            source_schema=MIGRATE.RICH_PLAN_SOURCE_SCHEMA,
+            plans=rich_plans,
+            candidates=[rich_plans[2]],
+            holdings=rich_plans[:2],
+        )
+
+        registry: dict[str, tuple[str, str]] = {}
+        parsed_older = MIGRATE._parse_version(older, registry)
+        parsed_newer = MIGRATE._parse_version(newer, registry)
+
+        self.assertEqual(parsed_older["ignored_underlyings"], ["OMIT.US"])
+        self.assertEqual(parsed_newer["holding_underlyings"], ["HOLD.US", "TRACKX.US"])
+        self.assertEqual(parsed_newer["observation_underlyings"], ["WATCH.US"])
+        self.assertEqual(
+            parsed_newer["tool_by_underlying"],
+            {"HOLD.US": "Call", "TRACKX.US": "单股杠杆 ETF", "WATCH.US": "Call"},
+        )
+        self.assertEqual(
+            [(row["underlying"], row["actions"], row["tool"], row["plan_stage"]) for row in parsed_newer["plans"]],
+            [
+                ("HOLD.US", ["卖出"], "Call", "holding_management"),
+                ("TRACKX.US", ["卖出"], "单股杠杆 ETF", "holding_management"),
+            ],
+        )
+
     def test_migrate_validates_hash_preserves_snapshot_and_is_immutable(self) -> None:
         with tempfile.TemporaryDirectory(prefix="daily-plan-migration-") as directory:
             root = Path(directory)
