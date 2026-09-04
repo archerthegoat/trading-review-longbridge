@@ -1,12 +1,22 @@
 # PA Setup 目录
 
-本目录是对已筛选标的或交易 Set 的路由提示，不是固定参数表。先按 pa-framework.md 完成数据门禁、状态和位置判断，再从下列五类中选择有证据支持的一类；没有证据时保留未知。
+本目录是对已筛选标的或明确交易 Set 的路由提示，不是固定参数表。先按 pa-framework.md 完成数据门禁、日线 Cycle、量价、EMA10/20、状态和位置判断，再选择有证据支持的结构；没有证据时保留未知。
 
 一手来源：
 
 - [Price Action Trading Terms Glossary](https://www.brookstradingcourse.com/price-action-trading-terms-glossary/)
 - [Trade Price Action / course index](https://www.brookstradingcourse.com/trade-price-action/)
 - [10 best price action trading patterns](https://www.brookstradingcourse.com/price-action/10-best-price-action-trading-patterns/)
+
+## 用户操作 Cycle
+
+以下三阶段用于组织当前用户的做多计划，不声称是 Brooks 官方固定分类：
+
+1. 底部反转 / wedge pop：下跌推动减弱，出现多次测试或小底部区间，再观察向上突破和已完成 1H 做多信号 K。wedge pop 是用户的操作标签；必须把推动、整理边界和突破证据说清楚。
+2. 突破后整理 / 二次进场：第一次向上突破得到接受后，等待横盘、小回踩或突破位重测；位置守住并重新出现已完成 1H 做多信号 K时，才进入二次买入考量。
+3. Extension / buy climax：明显放量扩张或连续强势上涨接近后期时，不新增追涨；观察已有仓位的减仓或退出条件，以及扩张后的耗尽、横盘或回测。
+
+每个阶段都先过位置门槛，再检查已完成 1H 信号。若关键区域被跌破且不能收回，停止原买入解释并等待重新构造。
 
 ## 1. 趋势回踩与第二段
 

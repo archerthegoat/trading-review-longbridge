@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, migrate, and extract immutable confirmed-plan versions.
+"""Validate, migrate, and extract confirmed plan-history snapshots.
 
 The migration mode accepts the private legacy authority JSON and emits one
 owner-only Markdown version.  The extract mode reads only immutable Markdown
@@ -653,7 +653,7 @@ def _markdown(payload: Mapping[str, Any]) -> str:
             "",
             f"# 已确认交易计划 · {payload['version']}",
             "",
-            "本文件是不可变的确认计划版本。机器读取仅使用下方唯一结构化区块。",
+            "本文件是确认后的计划历史快照；快照内容保持不改，当前计划仍可继续更新。机器读取仅使用下方唯一结构化区块。",
             "迁移保留旧 authority 的 candidates、holdings、global_rules 和 open_questions；未被明确规范化确认的内容不会参与成交对齐。",
             "",
             MARKER_START,
@@ -902,7 +902,7 @@ def _blocked(output_path: str | None) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate and extract immutable confirmed daily-trade-journal plans")
+    parser = argparse.ArgumentParser(description="Validate and extract confirmed daily-trade-journal plan-history snapshots")
     parser.add_argument("--mode", choices=("migrate", "extract"), required=True)
     parser.add_argument("--source-authority")
     parser.add_argument("--plans-dir")

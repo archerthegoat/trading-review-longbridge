@@ -1,7 +1,7 @@
 interface:
   display_name: "Al Brooks PA 分析"
-  short_description: "针对已筛选标的输出条件化 PA 分析与盘中关注清单"
-  default_prompt: "使用 $al-brooks-pa，先读取 references/pa-framework.md 与 references/personal-trading-profile.md；识别具体 setup 或 QQQ 日内 Set 时再读取 references/setup-catalog.md，按数据门禁输出市场状态、位置、signal/follow-through、条件分支、失效条件、必要时的宽区间主观概率与盘中关注要点。"
+  short_description: "用日线 Cycle 与已完成 1H 做多信号 K 管理候选和持仓"
+  default_prompt: "使用 $al-brooks-pa，先读取 references/pa-framework.md 与 references/personal-trading-profile.md；识别 wedge pop、突破整理、二次进场或 extension 时再读取 references/setup-catalog.md。用日线判断 Cycle、量价、EMA10/20 与位置，盘中只用已完成 1H K 线确认做多信号；输出位置门槛、1H 信号、跟随/二次进场、失效后等待及必要的主观概率。"
 
 policy:
   allow_implicit_invocation: true

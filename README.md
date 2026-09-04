@@ -1,26 +1,25 @@
 # 交易日记助手与 Al Brooks PA
 
-本仓库维护一个“日记编排 + 独立 PA 分析”的窄流程。`daily-trade-journal` 负责读取已确认计划、核对上一完成美股交易日的必要只读事实、采访用户和编排草稿；`al-brooks-pa` 只针对用户已经筛选的标的，用日线作背景、1H 作执行参考，输出条件化 Al Brooks Price Action 分析和 `盘中关注要点`。
+本仓库维护一个“动态当前计划 + 历史快照 + 每日复盘 + 独立 PA 分析”的窄流程。`daily-trade-journal` 负责读取当前计划和适用的事前快照、核对上一完成美股交易日的必要只读事实、采访用户并编排复盘及计划变化；`al-brooks-pa` 只针对用户已经筛选的标的，用日线判断 Cycle、量价、EMA10/20 和位置，盘中只用已完成 1H K 线作为操作依据。
 
 ## 日记编排流程
 
-日记入口先读取 `25 投资交易` 中的当前确认计划、相关旧日记和当天旧记录，再用 Longbridge CLI 只读核对上一完成美股交易日的成交与必要持仓字段。核对按确认时间、`underlying`、动作和工具进行；期权 `right` 在内部对齐为 `Call`/`Put`，公开结果不暴露合约身份。已有 `intraday_revisions` 是优先复用的计划输入。
+日记入口先读取 `25 投资交易/30 交易计划/当前交易计划.md`、适用的 `历史快照/*.md`、相关旧日记和当天旧记录，再按需用 Longbridge CLI 只读核对上一完成美股交易日的成交与必要持仓字段。历史核对不能使用今天更新后的当前计划倒推昨天的交易。
 
-先展示脱敏 broker facts 和计划对齐结果，再最多询问两条必要问题。只有用户回复后才显式调用 `$al-brooks-pa`，并把分析生成的盘中关注要点带入 Markdown 草稿。观察是有效的计划状态，但不会自动执行交易；只有明确相反或禁止才是“偏离计划”，缺失、不完整、未确认或时间无效证据都是“无法核对”。用户没有当日叙述时不自行补写。
+先恢复既有讨论并采访用户，再读取必要事实、做计划对齐和 PA 更新。观察是有效的计划状态，但不会自动执行交易；只有明确相反或禁止才是“偏离计划”，缺失、不完整、未确认或时间无效证据保持“无法核对”。用户确认操作来自未持久化盘中计划时，记录计划内与历史记录缺口，不把缺口判为偏离。
 
-展示草稿后必须等待用户明确说“确认写入”，才写入现有 Obsidian 目录：
+展示每日复盘草稿和当前计划变化后必须等待用户明确确认。日常写入目标是：
 
 - `25 投资交易/10 每日复盘`
-- `25 投资交易/20 周度复盘`
-- `25 投资交易/30 已确认计划摘要`
+- 有确认后的计划变化时再写 `25 投资交易/30 交易计划`
 
-无变化返回 `no_op`。写入前重读 live 文件并检查并发；写后先做文件系统回读，再按顺序做 Obsidian CLI 回读。
+`25 投资交易/20 周度复盘` 只在周度回顾任务中汇总每日复盘，不是每日默认写入目标。无变化返回 `no_op`。写入前重读 live 文件并检查并发；写后先做文件系统回读，再按顺序做 Obsidian CLI 回读。
 
 ## Al Brooks PA 边界
 
-PA Skill 面向用户已筛选的单一标的或交易 Set，不选股、不做基本面研究、不下单、不管理账户、不自动写 Obsidian，也不调用其他研究 Skill。它可以在证据足够时描述趋势、交易区间、通道、突破/失败、信号 K、跟随、回踩、微型双底/双顶和 measured move；每项均区分用户自述、数据事实和分析推断，并注明周期、来源、截至时间及 K 线是否完成。事件、触发、观察窗口、支持证据和反证都明确时，可给约 40–50%、50–60% 或 60–70% 的宽区间主观估计；这不是 Brooks 固定分档或回测胜率，缺口时暂不量化，且标的方向不等于 Long Call/Long Put 盈利概率。
+PA Skill 面向用户已筛选的做多标的，不选股、不做基本面研究、不下单、不管理账户、不自动写 Obsidian。日线判断底部反转/wedge pop、突破后整理/二次进场、extension/buy climax 等阶段，并结合量价和 EMA10/20；盘中只用已完成 1H K 线确认做多信号。到达关键位置不是买点，输出必须包含位置门槛、1H 信号、跟随/二次进场和失效后等待。
 
-PA 参考按需分层：分析流程与证据门禁见 [pa-framework.md](skills/al-brooks-pa/references/pa-framework.md)，五类 setup 见 [setup-catalog.md](skills/al-brooks-pa/references/setup-catalog.md)，稳定的脱敏表达偏好见 [personal-trading-profile.md](skills/al-brooks-pa/references/personal-trading-profile.md)。输出仍收敛为简短结构判断、1–3 个条件情景和盘中关注要点。
+PA 参考按需分层：分析流程与证据门禁见 [pa-framework.md](skills/al-brooks-pa/references/pa-framework.md)，用户做多 Cycle 与具体 setup 见 [setup-catalog.md](skills/al-brooks-pa/references/setup-catalog.md)，稳定的脱敏表达偏好见 [personal-trading-profile.md](skills/al-brooks-pa/references/personal-trading-profile.md)。输出按日线阶段与位置、1H 做多信号、跟随/二次进场和失效后等待收敛。
 
 ## 日内交易 Set
 
