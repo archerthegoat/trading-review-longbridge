@@ -88,16 +88,15 @@ META、SNOW、QQQ 默认是普通交易上下文。只有用户明确把交易�
 
 ### 7. 草稿、当前计划与确认写入
 
-完成交易记录、三方对齐和用户要求的宏观或 PA 研讨后，分别展示每日复盘草稿和当前计划变化，明确尚未写入。用户没有明确确认时只保持 awaiting_confirmation，不写 Obsidian。
+完成交易记录、三方对齐和用户要求的宏观或 PA 研讨后，分别展示“每日复盘草稿”和“当前计划变化”，明确尚未写入。确认时必须把当前用户的原话映射为 `write_scope = review | plan | both`；模糊的“可以”或旧确认不执行写入。
 
-收到当前用户明确“确认写入”后：
+收到本次明确写入确认后，先重读本分支会触及的 live 文件与当前快照指针，检查内容版本或并发变化，再只执行已确认的分支：
 
-1. 重读目标日期每日复盘、当前交易计划和当前快照指针，检查内容版本或并发变化；
-2. 若计划有变化，先创建新的 `历史快照/<时间戳>.md`，保留 `plan_before`、生效交易日和确认时间；历史快照禁止覆盖；
-3. 写入 `10 每日复盘/YYYY-MM-DD.md`，记录实际操作、计划对齐、注明采集时点的当前持仓角色、当日 PA/宏观结论和计划变化，并链接 `plan_before` 与 `plan_after`；
-4. 最后更新 `当前交易计划.md`。它必须由已验证的新快照生成，不允许与快照出现不同的计划语义；
-5. 每个文件写入后先做文件系统回读，再按顺序做 Obsidian CLI 回读；任一环节失败就停止后续指针更新，保留 partial/写入未验证，不自动重试外部写入；
-6. 当日只有复盘、计划没有变化时，只写每日复盘，不强制生成新快照。
+- `review`：只写 `10 每日复盘/YYYY-MM-DD.md`，不创建快照、不更新当前计划。未确认的计划草稿保持待确认，复盘中写 `plan_after: unchanged`。
+- `plan`：只写新的 `历史快照/<时间戳>.md`，验证后再更新 `当前交易计划.md`；不创建或修改每日复盘。
+- `both`：按“新历史快照 → 每日复盘 → 当前交易计划”执行。复盘链接已验证的 `plan_before` 与 `plan_after`。
+
+计划没有变化时不强制生成新快照。每个文件写入后先做文件系统回读，再做 Obsidian CLI 回读；任一环节失败就停止其依赖步骤，保留 partial/写入未验证，不自动重试外部写入。新快照已验证但后续失败时，保留该未接纳快照的路径和校验值；恢复时先对账并复用同一已确认快照，不重复创建。
 
 ## 状态与失败语义
 
@@ -108,6 +107,8 @@ META、SNOW、QQQ 默认是普通交易上下文。只有用户明确把交易�
 - daily_note：not_written、已存在或 blocked；
 - broker_fact：complete、empty、blocked；
 - journal：interview_required、awaiting_confirmation、written；
+- write_scope：none、review、plan 或 both；未经当前用户明确确认时必须为 none。
+- plan_write：not_requested、awaiting_confirmation、current、partial 或 blocked；不得从 journal 状态推导。
 - plan_mention 与 plan_alignment：使用上文规定的有限枚举；
 - macro：not_discussed、unchanged、updated、partial、blocked；
 - PA：NOT RUN、PENDING、complete 或 blocked。

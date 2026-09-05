@@ -16,9 +16,11 @@ def row(symbol="SYNTH.US", time="2026-09-04T10:00:00-04:00", **extra):
 
 
 class SanitizeTests(unittest.TestCase):
-    def call(self, value, *, kind="executions", flags=(), raw=False):
+    def call(self, value, *, kind="executions", flags=(), raw=False, date_args=None):
+        if date_args is None:
+            date_args = ("--review-date", DAY) if kind == "executions" else ("--as-of-date", DAY)
         proc = subprocess.run([sys.executable, "-B", str(SCRIPT), "--kind", kind,
-                               "--review-date", DAY, *flags],
+                               *date_args, *flags],
                               input=value if raw else json.dumps(value), text=True, capture_output=True)
         self.assertEqual(proc.stderr, "")
         self.assertNotIn(PRIVATE, proc.stdout)
@@ -34,6 +36,7 @@ class SanitizeTests(unittest.TestCase):
     def test_approved_fields_only(self):
         proc, result = self.call([row(instrument={"underlying": "SYNTH.US", "tool_kind": "stock"})])
         self.assertEqual(proc.returncode, 0)
+        self.assertEqual(result["schema_version"], "daily-trade-journal-broker-preview.v2")
         self.assertEqual(result["rows"], [{"underlying": "SYNTH.US", "action": "买入",
                                          "tool": "正股", "sequence": 1, "cutoff_relations": []}])
         self.assertNotIn("10:00", proc.stdout)
@@ -88,7 +91,42 @@ class SanitizeTests(unittest.TestCase):
         _, result = self.call([row(), row("SYNTH260911P00100000.US")], kind="positions")
         self.assertEqual(result["rows"], [{"underlying": "SYNTH.US", "tool": "无法识别"},
                                          {"underlying": "SYNTH.US", "tool": "Put"}])
+        self.assertEqual(result["as_of_date"], DAY)
+        self.assertNotIn("review_date", result)
         self.blocked([row()], kind="positions", flags=("--cutoff", "2026-09-04T14:00:00Z"))
+
+    def test_positions_require_collection_date_not_review_date(self):
+        self.blocked([row("SYNTH260904C00100000.US")], kind="positions",
+                     date_args=("--review-date", DAY))
+        self.blocked([row()], kind="positions", date_args=())
+        self.blocked([row()], date_args=("--as-of-date", DAY))
+
+    def test_us_positions_wrapper_extracts_only_stocks_and_options(self):
+        value = {
+            "account_type": PRIVATE,
+            "cash_buy_power": PRIVATE,
+            "cash_list": [{"total_cash": PRIVATE}],
+            "stock_list": [{"counter_id": "SYNTH.US", "quantity": PRIVATE}],
+            "option_list": [{"counter_id": "SYNTH260904P00100000.US",
+                             "underlying_counter_id": "SYNTH.US", "average_cost": PRIVATE}],
+            "crypto_list": [],
+        }
+        proc, result = self.call(value, kind="positions")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(result["rows"], [{"underlying": "SYNTH.US", "tool": "无法识别"},
+                                         {"underlying": "SYNTH.US", "tool": "0DTE Put"}])
+
+    def test_us_positions_wrapper_fails_closed_on_conflicts_or_unsupported_assets(self):
+        self.blocked({"stock_list": [], "option_list": [],
+                      "crypto_list": [{"counter_id": PRIVATE}], "cash_list": []}, kind="positions")
+        self.blocked({"stock_list": [{"symbol": "SYNTH.US", "counter_id": "OTHER.US"}],
+                      "option_list": [], "crypto_list": [], "cash_list": []}, kind="positions")
+        self.blocked({"stock_list": [],
+                      "option_list": [{"counter_id": "SYNTH260904P00100000.US",
+                                       "underlying_counter_id": "OTHER.US"}],
+                      "crypto_list": [], "cash_list": []}, kind="positions")
+        self.blocked({"stock_list": [], "option_list": [], "crypto_list": []},
+                     kind="positions")
 
     def test_instrument_mapping_needs_consistent_evidence(self):
         evidence = {"underlying": "SYNTH.US", "tool_kind": "单股杠杆 ETF"}

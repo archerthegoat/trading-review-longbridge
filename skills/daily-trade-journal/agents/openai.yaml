@@ -1,4 +1,4 @@
 interface:
   display_name: "交易日记助手"
   short_description: "分开维护当前计划、历史快照与每日复盘"
-  default_prompt: "使用 $daily-trade-journal，先确定复盘日与当晚计划日，恢复 Obsidian 计划及旧记录，核对成交与成交当时可见的标的走势，展示证据结果后只采访缺口；准备当晚条件计划和复盘草稿，等我明确确认写入后顺序回读。"
+  default_prompt: "使用 $daily-trade-journal，先确定复盘日与当晚计划日，恢复 Obsidian 计划及旧记录，核对成交与成交当时可见的标的走势，展示证据结果后只采访缺口；分别准备当晚条件计划和复盘草稿，等我明确确认写入哪一项或两项后再按分支顺序回读。"
