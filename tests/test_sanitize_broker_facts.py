@@ -1,0 +1,105 @@
+"""Synthetic-only regression tests at the stdin/stdout privacy boundary."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+SCRIPT = Path(__file__).resolve().parents[1] / "skills/daily-trade-journal/scripts/sanitize_broker_facts.py"
+DAY = "2026-09-04"
+PRIVATE = "SYNTHETIC_PRIVATE_SENTINEL"
+
+
+def row(symbol="SYNTH.US", time="2026-09-04T10:00:00-04:00", **extra):
+    return {"symbol": symbol, "side": "buy", "time": time,
+            "order_id": PRIVATE, "price": PRIVATE, "quantity": PRIVATE, **extra}
+
+
+class SanitizeTests(unittest.TestCase):
+    def call(self, value, *, kind="executions", flags=(), raw=False):
+        proc = subprocess.run([sys.executable, "-B", str(SCRIPT), "--kind", kind,
+                               "--review-date", DAY, *flags],
+                              input=value if raw else json.dumps(value), text=True, capture_output=True)
+        self.assertEqual(proc.stderr, "")
+        self.assertNotIn(PRIVATE, proc.stdout)
+        return proc, json.loads(proc.stdout)
+
+    def blocked(self, value, **kwargs):
+        proc, result = self.call(value, **kwargs)
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["reason"], "input_validation_failed")
+
+    def test_approved_fields_only(self):
+        proc, result = self.call([row(instrument={"underlying": "SYNTH.US", "tool_kind": "stock"})])
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(result["rows"], [{"underlying": "SYNTH.US", "action": "买入",
+                                         "tool": "正股", "sequence": 1, "cutoff_relations": []}])
+        self.assertNotIn("10:00", proc.stdout)
+
+    def test_options_expose_only_underlying_and_tool(self):
+        symbols = ["SYNTH260904C00100000.US", "SYNTH260911P00100000.US"]
+        proc, result = self.call([row(s) for s in symbols])
+        self.assertEqual([r["tool"] for r in result["rows"]], ["0DTE Call", "Put"])
+        for symbol in symbols:
+            self.assertNotIn(symbol, proc.stdout)
+        self.assertNotIn("00100000", proc.stdout)
+
+    def test_sort_ties_and_public_cutoffs(self):
+        _, result = self.call([row(time="2026-09-04T11:00:00-04:00"), row(), row()],
+                             flags=("--cutoff", "2026-09-04T14:00:00Z",
+                                    "--cutoff", "2026-09-04T14:30:00Z"))
+        self.assertEqual([r["sequence"] for r in result["rows"]], [1, 1, 2])
+        self.assertEqual(result["rows"][0]["cutoff_relations"], ["equal", "before"])
+        self.assertEqual(result["rows"][2]["cutoff_relations"], ["after", "after"])
+
+    def test_atomic_failure_after_valid_row(self):
+        self.blocked([row(), row(symbol=PRIVATE)])
+
+    def test_unknown_option_shape_and_digit_root_fail_closed(self):
+        for symbol in ["SYNTH260904X00100000.US", "SYNTH260904CWRONG.US", "SYNTH123.US"]:
+            with self.subTest(symbol=symbol):
+                self.blocked([row(symbol)])
+
+    def test_missing_or_conflicting_required_fields(self):
+        for value in [[{"symbol": "SYNTH.US"}], [row(filled_at="2026-09-04T14:00:00Z")],
+                      [row(underlying="OTHER.US")], [row(side=PRIVATE)], [None]]:
+            self.blocked(value)
+
+    def test_invalid_dates_and_naive_time(self):
+        for time in ["2026-09-05T10:00:00-04:00", "2026-09-04T10:00:00", PRIVATE]:
+            self.blocked([row(time=time)])
+
+    def test_window_uses_new_york_date_not_utc_date(self):
+        proc, result = self.call([row(time="2026-09-05T00:30:00Z")])
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(result["review_date"], DAY)
+        self.blocked([row(time="2026-09-04T00:30:00Z")])
+
+    def test_empty_success_is_not_empty_provider_output(self):
+        proc, result = self.call([])
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(result["status"], "empty")
+        for content in ["", PRIVATE, '{"rows": []}', '[{"symbol":"SYNTH.US","symbol":"OTHER.US"}]', '[NaN]']:
+            self.blocked(content, raw=True)
+
+    def test_positions_are_current_rows_without_quantity_or_inferred_equity_class(self):
+        _, result = self.call([row(), row("SYNTH260911P00100000.US")], kind="positions")
+        self.assertEqual(result["rows"], [{"underlying": "SYNTH.US", "tool": "无法识别"},
+                                         {"underlying": "SYNTH.US", "tool": "Put"}])
+        self.blocked([row()], kind="positions", flags=("--cutoff", "2026-09-04T14:00:00Z"))
+
+    def test_instrument_mapping_needs_consistent_evidence(self):
+        evidence = {"underlying": "SYNTH.US", "tool_kind": "单股杠杆 ETF"}
+        _, result = self.call([row(instrument=evidence)], kind="positions")
+        self.assertEqual(result["rows"][0]["tool"], "单股杠杆 ETF")
+        self.blocked([row(instrument={**evidence, "underlying": "OTHER.US"})])
+
+    def test_batch_limit_and_malformed_json_do_not_echo(self):
+        self.blocked('"' + PRIVATE + 'x' * (8 * 1024 * 1024) + '"', raw=True)
+        self.blocked('[{"symbol":"' + PRIVATE, raw=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -5,6 +5,10 @@ This module is deliberately offline.  It accepts already collected JSON only;
 it never calls a broker, reads a database, or writes an Obsidian note.  Raw
 execution fields are admitted only long enough to validate and classify them,
 then are discarded before the public result is built.
+
+This legacy projector performs preliminary field/plan matching only. It has no
+market-bar input and cannot determine final price-action condition alignment.
+Use sanitize_broker_facts.py for the current memory-only broker preview boundary.
 """
 
 from __future__ import annotations
